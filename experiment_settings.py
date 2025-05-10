@@ -22,13 +22,13 @@ def setting1_basic_evaluation():
     # Select 8 games for evaluation
     selected_games = [
         "TicTacToe-v0",
-        "Poker-v0",
-        "Checkers-v0",
-        "Othello-v0",
-        "Nim-v0",
-        "MemoryGame-v0",
-        "Snake-v0",
-        "WordChains-v0"
+        # "Poker-v0",
+        # "Checkers-v0",
+        # "Othello-v0",
+        # "Nim-v0",
+        # "MemoryGame-v0",
+        # "Snake-v0",
+        # "WordChains-v0"
     ]
 
     # Track results for TrueSkill calculation
@@ -42,7 +42,7 @@ def setting1_basic_evaluation():
             env = ta.wrappers.LLMObservationWrapper(env=env)
             env = ta.wrappers.SimpleRenderWrapper(
                 env=env,
-                player_names={0: "Player1", 1: "Player2"},
+                player_names={0: "Player0", 1: "Player1"},
             )
 
             env.reset(num_players=len(agents))
@@ -55,17 +55,26 @@ def setting1_basic_evaluation():
             rewards = env.close()
             results[game].append(rewards)
             
-            # Log results
-            with open("setting1_results.json", "a") as f:
+            # Determine game outcome
+            if rewards[0] > rewards[1]:
+                outcome = "Player 0 won"
+            elif rewards[1] > rewards[0]:
+                outcome = "Player 1 won"
+            else:
+                outcome = "Draw"
+            
+            # Log results with outcome
+            with open("setting1_results.jsonl", "a") as f:
                 json.dump({
                     "game": game,
                     "game_num": game_num,
-                    "rewards": rewards
+                    "rewards": rewards,
+                    "outcome": outcome
                 }, f)
                 f.write("\n")
 
-# Setting 2: Player2 with history
-def setting2_player2_with_history():
+# Setting 2: Player1 with history
+def setting2_player1_with_history():
     agents = {
         0: ta.agents.OpenRouterAgent(
             model_name="llama-3.1-8b",
@@ -81,13 +90,13 @@ def setting2_player2_with_history():
 
     selected_games = [
         "TicTacToe-v0",
-        "Poker-v0",
-        "Checkers-v0",
-        "Othello-v0",
-        "Nim-v0",
-        "MemoryGame-v0",
-        "Snake-v0",
-        "WordChains-v0"
+        # "Poker-v0",
+        # "Checkers-v0",
+        # "Othello-v0",
+        # "Nim-v0",
+        # "MemoryGame-v0",
+        # "Snake-v0",
+        # "WordChains-v0"
     ]
 
     # Store game histories
@@ -101,16 +110,26 @@ def setting2_player2_with_history():
             env = ta.wrappers.LLMObservationWrapper(env=env)
             env = ta.wrappers.SimpleRenderWrapper(
                 env=env,
-                player_names={0: "Player1", 1: "Player2"},
+                player_names={0: "Player0", 1: "Player1"},
             )
 
-            # Add previous game history to Player2's prompt if available
+            # Add previous game history to Player1's prompt if available
             if game_num > 0:
-                history_prompt = f"Previous game history:\n{json.dumps(game_histories[game][-1], indent=2)}\n\n"
-                agents[1].system_prompt = history_prompt + agents[1].system_prompt
+                history_prompt = "Previous game history:\n"
+                for prev_game_num, prev_game in enumerate(game_histories[game]):
+                    history_prompt += f"\nGame {prev_game_num + 1}:\n"
+                    history_prompt += f"Outcome: {prev_game['outcome']}\n"
+                    history_prompt += "Move sequence:\n"
+                    for move in prev_game["moves"]:
+                        history_prompt += f"- Player {move['player']}: {move['action']} -> {move['result']}\n"
+                
+                agents[1].system_prompt = history_prompt + "\n" + agents[1].system_prompt
 
             env.reset(num_players=len(agents))
-            current_game_history = []
+            current_game_history = {
+                "moves": [],
+                "outcome": None
+            }
             
             done = False
             while not done:
@@ -118,18 +137,28 @@ def setting2_player2_with_history():
                 action = agents[player_id](observation)
                 done, info = env.step(action=action)
                 
-                # Record game history
-                current_game_history.append({
+                # Record move with more context
+                current_game_history["moves"].append({
                     "player": player_id,
                     "observation": observation,
-                    "action": action
+                    "action": action,
+                    "result": info.get("result", "No result recorded")
                 })
             
             rewards = env.close()
+            
+            # Record game outcome
+            if rewards[0] > rewards[1]:
+                current_game_history["outcome"] = "Player 0 won"
+            elif rewards[1] > rewards[0]:
+                current_game_history["outcome"] = "Player 1 won"
+            else:
+                current_game_history["outcome"] = "Draw"
+            
             game_histories[game].append(current_game_history)
             
             # Log results
-            with open("setting2_results.json", "a") as f:
+            with open("setting2_results.jsonl", "a") as f:
                 json.dump({
                     "game": game,
                     "game_num": game_num,
@@ -138,8 +167,8 @@ def setting2_player2_with_history():
                 }, f)
                 f.write("\n")
 
-# Setting 3: Player1 gives advice to Player2
-def setting3_player1_advice():
+# Setting 3: Player0 as master teacher for Player1
+def setting3_player0_teacher():
     agents = {
         0: ta.agents.OpenRouterAgent(
             model_name="llama-3.1-8b",
@@ -155,18 +184,18 @@ def setting3_player1_advice():
 
     selected_games = [
         "TicTacToe-v0",
-        "Poker-v0",
-        "Checkers-v0",
-        "Othello-v0",
-        "Nim-v0",
-        "MemoryGame-v0",
-        "Snake-v0",
-        "WordChains-v0"
+        # "Poker-v0",
+        # "Checkers-v0",
+        # "Othello-v0",
+        # "Nim-v0",
+        # "MemoryGame-v0",
+        # "Snake-v0",
+        # "WordChains-v0"
     ]
 
-    # Store game histories and advice
+    # Store game histories and learnings
     game_histories = {game: [] for game in selected_games}
-    player1_advice = {game: [] for game in selected_games}
+    game_learnings = {game: [] for game in selected_games}
     
     # Play each game 5 times
     for game in selected_games:
@@ -176,20 +205,22 @@ def setting3_player1_advice():
             env = ta.wrappers.LLMObservationWrapper(env=env)
             env = ta.wrappers.SimpleRenderWrapper(
                 env=env,
-                player_names={0: "Player1", 1: "Player2"},
+                player_names={0: "Player0", 1: "Player1"},
             )
 
-            # If not first game, Player1 gives advice based on previous game
+            # If not first game, add previous learnings to Player1's prompt
             if game_num > 0:
-                advice_prompt = f"Based on the previous game history, what advice would you give to Player2 for the next game?\nPrevious game:\n{json.dumps(game_histories[game][-1], indent=2)}"
-                advice = agents[0](advice_prompt)
-                player1_advice[game].append(advice)
+                learning_prompt = "Previous game learnings:\n"
+                for prev_game_num, learning in enumerate(game_learnings[game]):
+                    learning_prompt += f"\nGame {prev_game_num + 1} learnings:\n{learning}\n"
                 
-                # Add advice to Player2's prompt
-                agents[1].system_prompt = f"Advice from Player1: {advice}\n\n" + agents[1].system_prompt
+                agents[1].system_prompt = learning_prompt + "\n" + agents[1].system_prompt
 
             env.reset(num_players=len(agents))
-            current_game_history = []
+            current_game_history = {
+                "moves": [],
+                "outcome": None
+            }
             
             done = False
             while not done:
@@ -197,29 +228,53 @@ def setting3_player1_advice():
                 action = agents[player_id](observation)
                 done, info = env.step(action=action)
                 
-                # Record game history
-                current_game_history.append({
+                # Record move with more context
+                current_game_history["moves"].append({
                     "player": player_id,
                     "observation": observation,
-                    "action": action
+                    "action": action,
+                    "result": info.get("result", "No result recorded")
                 })
             
             rewards = env.close()
+            
+            # Record game outcome
+            if rewards[0] > rewards[1]:
+                current_game_history["outcome"] = "Player 0 won"
+            elif rewards[1] > rewards[0]:
+                current_game_history["outcome"] = "Player 1 won"
+            else:
+                current_game_history["outcome"] = "Draw"
+            
+            # Generate key learnings from the game
+            learning_prompt = (
+                f"As a master teacher, analyze this game and provide key learnings for Player1.\n"
+                f"Game outcome: {current_game_history['outcome']}\n"
+                f"Move sequence: {json.dumps(current_game_history['moves'], indent=2)}\n\n"
+                f"Provide learnings in this format:\n"
+                f"1. Strategic principles to follow\n"
+                f"2. Specific moves to consider\n"
+                f"3. Moves to avoid\n"
+                f"4. Key patterns to watch for"
+            )
+            current_learning = agents[0](learning_prompt)
+            game_learnings[game].append(current_learning)
+            
             game_histories[game].append(current_game_history)
             
             # Log results
-            with open("setting3_results.json", "a") as f:
+            with open("setting3_results.jsonl", "a") as f:
                 json.dump({
                     "game": game,
                     "game_num": game_num,
                     "rewards": rewards,
                     "history": current_game_history,
-                    "advice": player1_advice[game][-1] if game_num > 0 else None
+                    "learning": current_learning
                 }, f)
                 f.write("\n")
 
 if __name__ == "__main__":
     # Run the experiment you want
     setting1_basic_evaluation()
-    # setting2_player2_with_history()
-    # setting3_player1_advice() 
+    setting2_player1_with_history()
+    setting3_player0_teacher() 
