@@ -40,7 +40,7 @@ class HumanAgent(Agent):
 
 class OpenRouterAgent(Agent):
     """ Agent class using the OpenRouter API to generate responses. """
-    def __init__(self, model_name: str, system_prompt: Optional[str] = STANDARD_GAME_PROMPT, verbose: bool = False, **kwargs):
+    def __init__(self, model_name: str, system_prompt: Optional[str] = STANDARD_GAME_PROMPT, verbose: bool = False, api_base: Optional[str] = None, api_key: Optional[str] = None, **kwargs):
         """
         Initialize the OpenRouter agent.
 
@@ -48,6 +48,8 @@ class OpenRouterAgent(Agent):
             model_name (str): The name of the model.
             system_prompt (Optional[str]): The system prompt to use (default: STANDARD_GAME_PROMPT)
             verbose (bool): If True, additional debug info will be printed.
+            api_base (Optional[str]): The base URL for the OpenRouter API.
+            api_key (Optional[str]): The API key for the OpenRouter API.
             **kwargs: Additional keyword arguments to pass to the OpenAI API call.
         """
         super().__init__()
@@ -64,14 +66,17 @@ class OpenRouterAgent(Agent):
                 "Install it with: pip install openai"
             )
 
-        # Set the open router api key from an environment variable
-        # api_key = os.getenv("OPENROUTER_API_KEY")
-        api_key = "xxx"
-        if not api_key:
-            raise ValueError("OpenRouter API key not found. Please set the OPENROUTER_API_KEY environment variable.")
+        # Use provided API key or get from environment variable
+        if api_key is None:
+            api_key = os.getenv("OPENROUTER_API_KEY")
+            if not api_key:
+                raise ValueError("OpenRouter API key not found. Please set the OPENROUTER_API_KEY environment variable or provide it directly.")
         
-        self.client = OpenAI(base_url="http://localhost:8010/v1", api_key=api_key)
-        # self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        # Use provided API base or default to localhost
+        if api_base is None:
+            api_base = "http://localhost:8010/v1"
+        
+        self.client = OpenAI(base_url=api_base, api_key=api_key)
         
 
     def _make_request(self, observation: str) -> str:
