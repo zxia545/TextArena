@@ -12,7 +12,7 @@ from textarena.agents.basic_agents import Qwen3Agent
 
 import logging
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filename='experiment.log')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', filename='experiment.log')
 logger = logging.getLogger(__name__)
 
 def get_player1_agent(model_name: str):
@@ -20,40 +20,42 @@ def get_player1_agent(model_name: str):
     return ta.agents.OpenRouterAgent(
         model_name=model_name,
         api_base="http://localhost:8010/v1",
-        api_key="your_api_key_here"
+        api_key="your_api_key_here",
+        timeout=60
     )
 
 def get_player0_agent():
-    """Helper function to create Player 0 agent (Qwen3-32B)"""
-    return Qwen3Agent(
-        model_name="qwen3-32b",
+    """Helper function to create Player 0 agent (Qwen2.5-32B)"""
+    return ta.agents.OpenRouterAgent(
+        model_name="qwen2.5-32b-chat",
         api_base="http://localhost:8020/v1",
-        api_key="your_api_key_here"
+        api_key="your_api_key_here",
+        timeout=60
     )
 
-# List of all games to evaluate
-ALL_GAMES = [
-    "SpellingBee-v0",
-    "Poker-v0",
-    "SpiteAndMalice-v0",
-    "Stratego-v0",
-    "Tak-v0",
-    "TruthAndDeception-v0",
-    "UltimateTicTacToe-v0",
-    "WordChains-v0",
-    "TicTacToe-v0",
-    "Breakthrough-v0",
-    "Checkers-v0",
-    "KuhnPoker-v0",
-    "LetterAuction-v0",
-    "MemoryGame-v0",
-    "Nim-v0",
-    "Othello-v0",
-    "PigDice-v0",
-    "SimpleBlindAuction-v0",
-    "Snake-v0",
-    "SecretMafia-v0",
-]
+# # List of all games to evaluate
+# ALL_GAMES = [
+#     "SpellingBee-v0",
+#     "Poker-v0",
+#     "SpiteAndMalice-v0",
+#     "Stratego-v0",
+#     "Tak-v0",
+#     "TruthAndDeception-v0",
+#     "UltimateTicTacToe-v0",
+#     "WordChains-v0",
+#     "TicTacToe-v0",
+#     "Breakthrough-v0",
+#     "Checkers-v0",
+#     "KuhnPoker-v0",
+#     "LetterAuction-v0",
+#     "MemoryGame-v0",
+#     "Nim-v0",
+#     "Othello-v0",
+#     "PigDice-v0",
+#     "SimpleBlindAuction-v0",
+#     "Snake-v0",
+#     "SecretMafia-v0",
+# ]
 
 # Setting 1: Basic win rate evaluation with TrueSkill
 def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]):
@@ -121,7 +123,7 @@ def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]
                         "game_num": game_num,
                         "rewards": rewards,
                         "outcome": outcome,
-                        "player0_model": "qwen3-32b",
+                        "player0_model": "qwen2.5-32b-chat",
                         "player1_model": player1_model_name,
                         "error": None
                     }, f)
@@ -137,7 +139,7 @@ def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]
                         "game_num": game_num,
                         "rewards": [0, 0],
                         "outcome": "Error",
-                        "player0_model": "qwen3-32b",
+                        "player0_model": "qwen2.5-32b-chat",
                         "player1_model": player1_model_name,
                         "error": str(e)
                     }, f)
@@ -239,7 +241,7 @@ def setting2_player1_with_history(player1_model_name: str, selected_games: List[
                         "game_num": game_num,
                         "rewards": rewards,
                         "history": current_game_history,
-                        "player0_model": "qwen3-32b",
+                        "player0_model": "qwen2.5-32b-chat",
                         "player1_model": player1_model_name,
                         "error": None if current_game_history["outcome"] != "Error" else str(e)
                     }, f)
@@ -255,7 +257,7 @@ def setting2_player1_with_history(player1_model_name: str, selected_games: List[
                         "game_num": game_num,
                         "rewards": [0, 0],
                         "history": {"moves": [], "outcome": "Error"},
-                        "player0_model": "qwen3-32b",
+                        "player0_model": "qwen2.5-32b-chat",
                         "player1_model": player1_model_name,
                         "error": str(e)
                     }, f)
@@ -377,7 +379,7 @@ def setting3_player0_teacher(player1_model_name: str, selected_games: List[str])
                         "rewards": rewards,
                         "history": current_game_history,
                         "learning": current_learning,
-                        "player0_model": "qwen3-32b",
+                        "player0_model": "qwen2.5-32b-chat",
                         "player1_model": player1_model_name,
                         "error": None if current_game_history["outcome"] != "Error" else str(e)
                     }, f)
@@ -394,64 +396,45 @@ def setting3_player0_teacher(player1_model_name: str, selected_games: List[str])
                         "rewards": [0, 0],
                         "history": {"moves": [], "outcome": "Error"},
                         "learning": None,
-                        "player0_model": "qwen3-32b",
+                        "player0_model": "qwen2.5-32b-chat",
                         "player1_model": player1_model_name,
                         "error": str(e)
                     }, f)
                     f.write("\n")
                 continue
 
-def run_all_settings(player1_model_name: str, selected_games: List[str]):
-    """Run all settings for a given model"""
-    logger.info(f"Starting evaluation run for model: {player1_model_name}")
-    # Create results directory if it doesn't exist
-    os.makedirs("results", exist_ok=True)
-    logger.info("Results directory created/verified")
-    
-    logger.info(f"Running Setting 1 with {player1_model_name}...")
-    setting1_basic_evaluation(player1_model_name, selected_games)
-    
-    logger.info(f"Running Setting 2 with {player1_model_name}...")
-    setting2_player1_with_history(player1_model_name, selected_games)
-    
-    logger.info(f"Running Setting 3 with {player1_model_name}...")
-    setting3_player0_teacher(player1_model_name, selected_games)
-    
-    logger.info(f"Completed all settings for model: {player1_model_name}")
-
 def main():
-    parser = argparse.ArgumentParser(description="Start vLLM server and run experiment settings.")
-    parser.add_argument("--model-path", type=str, required=True, help="Path to the model")
+    parser = argparse.ArgumentParser(description="Run experiment settings.")
     parser.add_argument("--model-name", type=str, required=True, help="Name to serve the model as")
-    parser.add_argument("--port", type=int, default=8010, help="Port for the vLLM server")
-    parser.add_argument("--gpu", type=int, default=4, help="Number of GPUs to use")
-    parser.add_argument("--games", type=str, nargs="+", default=ALL_GAMES, help="List of games to evaluate")
+    parser.add_argument("--games", type=str, nargs="+", help="List of games to evaluate")
+    parser.add_argument("--setting", type=int, required=True, help="Setting number to run (1-3)")
+    parser.add_argument("--output", type=str, required=True, help="Output file path")
     args = parser.parse_args()
     logger.info(f"Starting experiment with arguments: {args}")
 
-    # Step 1: Start vLLM server
-    logger.info(f"Starting vLLM server for {args.model_name}...")
-    server_proc = start_vllm_server(args.model_path, args.model_name, port=args.port, gpu=args.gpu)
-    logger.info("vLLM server started successfully")
 
     try:
         # Wait for server to start
         # logger.info("Waiting for server to start...")
         # time.sleep(30)
 
-        # Step 2: Run all settings
-        logger.info("Starting experiment settings...")
-        run_all_settings(args.model_name, args.games)
-        logger.info("Experiment settings completed successfully.")
+        # Step 2: Run the specified setting
+        logger.info(f"Running Setting {args.setting}...")
+        if args.setting == 1:
+            setting1_basic_evaluation(args.model_name, args.games)
+        elif args.setting == 2:
+            setting2_player1_with_history(args.model_name, args.games)
+        elif args.setting == 3:
+            setting3_player0_teacher(args.model_name, args.games)
+        else:
+            raise ValueError(f"Invalid setting number: {args.setting}")
+        
+        logger.info(f"Setting {args.setting} completed successfully.")
     except Exception as e:
         logger.error(f"An error occurred: {e}", exc_info=True)
-        logger.info("Attempting to run settings again after error...")
-        run_all_settings(args.model_name, args.games)
     finally:
         # Step 3: Stop the server
-        logger.info("Stopping vLLM server...")
-        stop_vllm_server(server_proc)
-        logger.info("vLLM server stopped successfully")
+        logger.info("Stopping Task : {} , setting : {}".format(args.task, args.setting))
 
 if __name__ == "__main__":
     main() 
