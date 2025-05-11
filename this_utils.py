@@ -246,8 +246,36 @@ def start_vllm_server(model_path: str, model_name: str, port: int, gpu: int = 1)
     --port={port} \
     --trust-remote-code'
     """
+    # command = f"""
+    # bash -c 'source /home/v-huzhengyu/miniconda3/etc/profile.d/conda.sh && conda activate vllm && \
+    # python -m vllm.entrypoints.openai.api_server \
+    # --model={model_path} \
+    # --served-model-name={model_name} \
+    # --tensor-parallel-size={gpu} \
+    # --gpu-memory-utilization=0.85 \
+    # --port={port} \
+    # --trust-remote-code'
+    # """
+
+    process = subprocess.Popen(command, shell=True, preexec_fn=os.setsid)
+    
+    wait_for_server(f"http://localhost:{port}", 1000)
+    
+    print(f"[INFO] Started vLLM server for model '{model_path}' on port {port} (GPU={gpu}).")
+
+    return process
+
+
+
+def start_vllm_server_thinking(model_path: str, model_name: str, port: int, gpu: int = 1):
+    """
+    Launches a vLLM OpenAI API server via subprocess.
+    model_path: The path or name of the model you want to host
+    port: Which port to host on
+    gpu: The tensor-parallel-size (number of GPUs)
+    """
     command = f"""
-    bash -c 'source /home/v-huzhengyu/miniconda3/etc/profile.d/conda.sh && conda activate vllm && \
+    bash -c 'source activate && conda activate vllm && \
     python -m vllm.entrypoints.openai.api_server \
     --model={model_path} \
     --served-model-name={model_name} \
@@ -256,6 +284,18 @@ def start_vllm_server(model_path: str, model_name: str, port: int, gpu: int = 1)
     --port={port} \
     --trust-remote-code'
     """
+        # --enable-reasoning \
+    # --reasoning-parser=deepseek_r1'
+    # command = f"""
+    # bash -c 'source /home/v-huzhengyu/miniconda3/etc/profile.d/conda.sh && conda activate vllm && \
+    # python -m vllm.entrypoints.openai.api_server \
+    # --model={model_path} \
+    # --served-model-name={model_name} \
+    # --tensor-parallel-size={gpu} \
+    # --gpu-memory-utilization=0.85 \
+    # --port={port} \
+    # --trust-remote-code'
+    # """
 
     process = subprocess.Popen(command, shell=True, preexec_fn=os.setsid)
     

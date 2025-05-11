@@ -2,14 +2,14 @@ import textarena as ta
 
 # Initialize agents
 agents = {
-    0: ta.agents.OpenRouterAgent(model_name="llama-3.1-8b"),
-    1: ta.agents.OpenRouterAgent(model_name="llama-3.1-8b"),
+    0: ta.agents.OpenRouterAgent(model_name="llama-3.1-8b", api_key="sk-or-v1-1234567890"),
+    1: ta.agents.OpenRouterAgent(model_name="llama-3.1-8b", api_key="sk-or-v1-1234567890"),
 }
 
     
 env_list =[
-    "SpellingBee-v0",
-    "Poker-v0",
+    # "SpellingBee-v0",
+    # "Poker-v0",
     "SpiteAndMalice-v0",
     "Stratego-v0",
     "Tak-v0",

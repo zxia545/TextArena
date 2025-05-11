@@ -15,6 +15,7 @@ __all__ = [
     "CerebrasAgent",
     "AWSBedrockAgent",
     "AnthropicAgent",
+    "Qwen3Agent",
 ]
 
 
@@ -40,7 +41,7 @@ class HumanAgent(Agent):
 
 class OpenRouterAgent(Agent):
     """ Agent class using the OpenRouter API to generate responses. """
-    def __init__(self, model_name: str, system_prompt: Optional[str] = STANDARD_GAME_PROMPT, verbose: bool = False, api_base: Optional[str] = None, api_key: Optional[str] = None, **kwargs):
+    def __init__(self, model_name: str, system_prompt: Optional[str] = STANDARD_GAME_PROMPT, verbose: bool = False, api_base: Optional[str] = None, api_key: Optional[str] = None, timeout: int = 30, **kwargs):
         """
         Initialize the OpenRouter agent.
 
@@ -50,6 +51,7 @@ class OpenRouterAgent(Agent):
             verbose (bool): If True, additional debug info will be printed.
             api_base (Optional[str]): The base URL for the OpenRouter API.
             api_key (Optional[str]): The API key for the OpenRouter API.
+            timeout (int): Timeout in seconds for each request (default: 30)
             **kwargs: Additional keyword arguments to pass to the OpenAI API call.
         """
         super().__init__()
@@ -57,9 +59,12 @@ class OpenRouterAgent(Agent):
         self.verbose = verbose 
         self.system_prompt = system_prompt
         self.kwargs = kwargs
+        self.timeout = timeout
+        self._current_request = None
 
         try:
             from openai import OpenAI
+            import threading
         except ImportError:
             raise ImportError(
                 "OpenAI package is required for OpenRouterAgent. "
@@ -85,21 +90,39 @@ class OpenRouterAgent(Agent):
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": observation}
         ]
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            n=1,
-            **self.kwargs
-        )
-        return response.choices[0].message.content.strip()
 
-    def _retry_request(self, observation: str, retries: int = 3, delay: int = 5) -> str:
+        # Cancel any existing request
+        if self._current_request is not None:
+            try:
+                self._current_request.cancel()
+            except:
+                pass
+
+        try:
+            # Create a new request with timeout
+            self._current_request = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                n=1,
+                timeout=self.timeout,
+                **self.kwargs
+            )
+            response = self._current_request
+            self._current_request = None
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            self._current_request = None
+            if "timeout" in str(e).lower():
+                raise TimeoutError(f"Request timed out after {self.timeout} seconds")
+            raise e
+
+    def _retry_request(self, observation: str, retries: int = 5, delay: int = 5) -> str:
         """
         Attempt to make an API request with retries.
 
         Args:
             observation (str): The input to process.
-            retries (int): The number of attempts to try.
+            retries (int): The number of attempts to try (default: 5).
             delay (int): Seconds to wait between attempts.
 
         Raises:
@@ -731,3 +754,22 @@ class AsyncAnthropicAgent(Agent):
         if not isinstance(observation, str):
             raise ValueError(f"Observation must be a string. Received type: {type(observation)}")
         return await self._retry_request(observation)
+
+class Qwen3Agent(OpenRouterAgent):
+    """Agent class for Qwen3 models with thinking template handling."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.extra_body = {
+            'chat_template_kwargs': {
+                'enable_thinking': False
+            }
+        }
+
+    def __call__(self, observation: str) -> str:
+        response = super().__call__(observation)
+        
+        # Split on </think> and take the last part if it exists
+        if '</think>' in response:
+            response = response.split('</think>')[-1].strip()
+        
+        return response
