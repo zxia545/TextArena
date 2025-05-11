@@ -8,9 +8,8 @@ import sys
 import time
 from this_utils import start_vllm_server, stop_vllm_server
 from textarena.agents.basic_agents import Qwen3Agent
-
-
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', filename='experiment.log')
 logger = logging.getLogger(__name__)
@@ -58,7 +57,7 @@ def get_player0_agent():
 # ]
 
 # Setting 1: Basic win rate evaluation with TrueSkill
-def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]):
+def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str], output_file: str):
     logger.info(f"Starting Setting 1 evaluation with Player1 model: {player1_model_name}")
     # Initialize agents
     agents = {
@@ -116,8 +115,7 @@ def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]
                 logger.info(f"Game {game_num + 1} outcome: {outcome}")
                 
                 # Log results with outcome and model names
-                result_file = f"results/setting1_{player1_model_name}_results.jsonl"
-                with open(result_file, "a") as f:
+                with open(output_file, "a") as f:
                     json.dump({
                         "game": game,
                         "game_num": game_num,
@@ -128,12 +126,11 @@ def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]
                         "error": None
                     }, f)
                     f.write("\n")
-                logger.debug(f"Results saved to {result_file}")
+                logger.debug(f"Results saved to {output_file}")
             except Exception as e:
                 logger.error(f"Error in game {game_num + 1} of {game}: {str(e)}")
                 # Log the error and continue with next game
-                result_file = f"results/setting1_{player1_model_name}_results.jsonl"
-                with open(result_file, "a") as f:
+                with open(output_file, "a") as f:
                     json.dump({
                         "game": game,
                         "game_num": game_num,
@@ -147,7 +144,7 @@ def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]
                 continue
 
 # Setting 2: Player1 with history
-def setting2_player1_with_history(player1_model_name: str, selected_games: List[str]):
+def setting2_player1_with_history(player1_model_name: str, selected_games: List[str], output_file: str):
     logger.info(f"Starting Setting 2 evaluation with Player1 model: {player1_model_name}")
     agents = {
         0: get_player0_agent(),
@@ -174,9 +171,11 @@ def setting2_player1_with_history(player1_model_name: str, selected_games: List[
 
                 # Add previous game history to Player1's prompt if available
                 if game_num > 0:
-                    logger.info(f"Adding history from previous {game_num} games to Player1's prompt")
-                    history_prompt = "Previous game history:\n"
-                    for prev_game_num, prev_game in enumerate(game_histories[game]):
+                    logger.info(f"Adding history from previous {min(game_num, 4)} games to Player1's prompt")
+                    history_prompt = "Previous game history (most recent 4 games):\n"
+                    # Get the most recent 4 games or all games if less than 4
+                    recent_games = game_histories[game][-4:] if len(game_histories[game]) > 4 else game_histories[game]
+                    for prev_game_num, prev_game in enumerate(recent_games):
                         history_prompt += f"\nGame {prev_game_num + 1}:\n"
                         history_prompt += f"Outcome: {prev_game['outcome']}\n"
                         history_prompt += "Move sequence:\n"
@@ -234,8 +233,7 @@ def setting2_player1_with_history(player1_model_name: str, selected_games: List[
                 game_histories[game].append(current_game_history)
                 
                 # Log results with model names
-                result_file = f"results/setting2_{player1_model_name}_results.jsonl"
-                with open(result_file, "a") as f:
+                with open(output_file, "a") as f:
                     json.dump({
                         "game": game,
                         "game_num": game_num,
@@ -246,12 +244,11 @@ def setting2_player1_with_history(player1_model_name: str, selected_games: List[
                         "error": None if current_game_history["outcome"] != "Error" else str(e)
                     }, f)
                     f.write("\n")
-                logger.debug(f"Results saved to {result_file}")
+                logger.debug(f"Results saved to {output_file}")
             except Exception as e:
                 logger.error(f"Error in game {game_num + 1} of {game}: {str(e)}")
                 # Log the error and continue with next game
-                result_file = f"results/setting2_{player1_model_name}_results.jsonl"
-                with open(result_file, "a") as f:
+                with open(output_file, "a") as f:
                     json.dump({
                         "game": game,
                         "game_num": game_num,
@@ -265,7 +262,7 @@ def setting2_player1_with_history(player1_model_name: str, selected_games: List[
                 continue
 
 # Setting 3: Player0 as master teacher for Player1
-def setting3_player0_teacher(player1_model_name: str, selected_games: List[str]):
+def setting3_player0_teacher(player1_model_name: str, selected_games: List[str], output_file: str):
     logger.info(f"Starting Setting 3 evaluation with Player1 model: {player1_model_name}")
     agents = {
         0: get_player0_agent(),
@@ -371,8 +368,7 @@ def setting3_player0_teacher(player1_model_name: str, selected_games: List[str])
                 game_histories[game].append(current_game_history)
                 
                 # Log results with model names
-                result_file = f"results/setting3_{player1_model_name}_results.jsonl"
-                with open(result_file, "a") as f:
+                with open(output_file, "a") as f:
                     json.dump({
                         "game": game,
                         "game_num": game_num,
@@ -384,12 +380,11 @@ def setting3_player0_teacher(player1_model_name: str, selected_games: List[str])
                         "error": None if current_game_history["outcome"] != "Error" else str(e)
                     }, f)
                     f.write("\n")
-                logger.debug(f"Results saved to {result_file}")
+                logger.debug(f"Results saved to {output_file}")
             except Exception as e:
                 logger.error(f"Error in game {game_num + 1} of {game}: {str(e)}")
                 # Log the error and continue with next game
-                result_file = f"results/setting3_{player1_model_name}_results.jsonl"
-                with open(result_file, "a") as f:
+                with open(output_file, "a") as f:
                     json.dump({
                         "game": game,
                         "game_num": game_num,
@@ -403,38 +398,78 @@ def setting3_player0_teacher(player1_model_name: str, selected_games: List[str])
                     f.write("\n")
                 continue
 
+def run_single_setting(setting_num: int, game: str, model_name: str, output_file: str):
+    """Run a single setting for a specific game"""
+    logger.info(f"Starting Setting {setting_num} for game {game} with model {model_name}")
+    
+    try:
+        if setting_num == 1:
+            setting1_basic_evaluation(model_name, [game], output_file)
+        elif setting_num == 2:
+            setting2_player1_with_history(model_name, [game], output_file)
+        elif setting_num == 3:
+            setting3_player0_teacher(model_name, [game], output_file)
+        else:
+            raise ValueError(f"Invalid setting number: {setting_num}")
+        
+        logger.info(f"Setting {setting_num} completed for game {game}")
+        return True
+    except Exception as e:
+        logger.error(f"Error in Setting {setting_num} for game {game}: {str(e)}")
+        return False
+
+def run_parallel_settings(game: str, model_name: str, output_dir: str, max_workers: int = 3):
+    """Run all settings in parallel for a single game"""
+    logger.info(f"Starting parallel settings for game {game}")
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Create output files for each setting
+    output_files = {
+        setting: os.path.join(output_dir, f"setting{setting}_{game}_{model_name}_results.jsonl")
+        for setting in range(1, 4)
+    }
+    
+    # Run settings in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        for setting in range(1, 4):
+            future = executor.submit(
+                run_single_setting,
+                setting,
+                game,
+                model_name,
+                output_files[setting]
+            )
+            futures.append(future)
+        
+        # Wait for all settings to complete
+        for setting, future in enumerate(futures, 1):
+            try:
+                success = future.result()
+                if success:
+                    logger.info(f"Setting {setting} completed successfully for {game}")
+                else:
+                    logger.error(f"Setting {setting} failed for {game}")
+            except Exception as e:
+                logger.error(f"Error in Setting {setting} for {game}: {str(e)}")
+
 def main():
     parser = argparse.ArgumentParser(description="Run experiment settings.")
     parser.add_argument("--model-name", type=str, required=True, help="Name to serve the model as")
-    parser.add_argument("--games", type=str, nargs="+", help="List of games to evaluate")
-    parser.add_argument("--setting", type=int, required=True, help="Setting number to run (1-3)")
-    parser.add_argument("--output", type=str, required=True, help="Output file path")
+    parser.add_argument("--game", type=str, required=True, help="Game to evaluate")
+    parser.add_argument("--output-dir", type=str, required=True, help="Output directory path")
+    parser.add_argument("--max-workers", type=int, default=3, help="Maximum number of parallel settings")
     args = parser.parse_args()
+    
     logger.info(f"Starting experiment with arguments: {args}")
-
-
+    
     try:
-        # Wait for server to start
-        # logger.info("Waiting for server to start...")
-        # time.sleep(30)
-
-        # Step 2: Run the specified setting
-        logger.info(f"Running Setting {args.setting}...")
-        if args.setting == 1:
-            setting1_basic_evaluation(args.model_name, args.games)
-        elif args.setting == 2:
-            setting2_player1_with_history(args.model_name, args.games)
-        elif args.setting == 3:
-            setting3_player0_teacher(args.model_name, args.games)
-        else:
-            raise ValueError(f"Invalid setting number: {args.setting}")
-        
-        logger.info(f"Setting {args.setting} completed successfully.")
+        run_parallel_settings(args.game, args.model_name, args.output_dir, args.max_workers)
+        logger.info("All settings completed successfully.")
     except Exception as e:
         logger.error(f"An error occurred: {e}", exc_info=True)
-    finally:
-        # Step 3: Stop the server
-        logger.info("Stopping Task : {} , setting : {}".format(args.task, args.setting))
 
 if __name__ == "__main__":
     main() 
