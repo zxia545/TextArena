@@ -1,6 +1,6 @@
 import textarena as ta
 import json
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import os
 import argparse
 import subprocess
@@ -10,9 +10,50 @@ from this_utils import start_vllm_server, stop_vllm_server
 from textarena.agents.basic_agents import Qwen3Agent
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
+from threading import Lock
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', filename='experiment.log')
 logger = logging.getLogger(__name__)
+
+# Selected games for evaluation
+SELECTED_GAMES = [
+    "TicTacToe-v0",
+    "Poker-v0",
+    "Stratego-v0",
+    "TruthAndDeception-v0",
+    "UltimateTicTacToe-v0",
+    "Checkers-v0",
+    "Othello-v0",
+    "SecretMafia-v0"
+]
+
+SELECTED_GAMES =[
+    "SpellingBee-v0",
+    # "Poker-v0",
+    "SpiteAndMalice-v0",
+    # "Stratego-v0",
+    "Tak-v0",
+    # "TruthAndDeception-v0",
+    # "UltimateTicTacToe-v0",
+    "WordChains-v0",
+    # "TicTacToe-v0",
+    "Breakthrough-v0",
+    # "Checkers-v0",
+    "KuhnPoker-v0",
+    "LetterAuction-v0",
+    "MemoryGame-v0",
+    "Nim-v0",
+    # "Othello-v0",
+    "PigDice-v0",
+    "SimpleBlindAuction-v0",
+    "Snake-v0",
+    # "SecretMafia-v0",
+    "WildTicTacToe-v0",
+    "ReverseTicTacToe-v0",
+    "RandomizedTicTacToe-v0",
+    "QuantumTicTacToe-v0",
+]
 
 def get_player1_agent(model_name: str):
     """Helper function to create Player 1 agent with specified model"""
@@ -418,58 +459,95 @@ def run_single_setting(setting_num: int, game: str, model_name: str, output_file
         logger.error(f"Error in Setting {setting_num} for game {game}: {str(e)}")
         return False
 
-def run_parallel_settings(game: str, model_name: str, output_dir: str, max_workers: int = 3):
-    """Run all settings in parallel for a single game"""
-    logger.info(f"Starting parallel settings for game {game}")
+def run_parallel_evaluation(model_name: str, output_dir: str, max_concurrent: int = 9):
+    """Run all games and settings in parallel with a maximum of concurrent tasks"""
+    logger.info(f"Starting parallel evaluation with max {max_concurrent} concurrent tasks")
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
-    # Create output files for each setting
-    output_files = {
-        setting: os.path.join(output_dir, f"setting{setting}_{game}_{model_name}_results.jsonl")
-        for setting in range(1, 4)
-    }
-    
-    # Run settings in parallel
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
+    # Create task queue with all combinations
+    task_queue = Queue()
+    for game in SELECTED_GAMES:
         for setting in range(1, 4):
-            future = executor.submit(
-                run_single_setting,
-                setting,
-                game,
-                model_name,
-                output_files[setting]
-            )
-            futures.append(future)
-        
-        # Wait for all settings to complete
-        for setting, future in enumerate(futures, 1):
+            output_file = os.path.join(output_dir, f"setting{setting}_{game}_{model_name}_results.jsonl")
+            task_queue.put((setting, game, output_file))
+    
+    # Track completed and failed tasks
+    completed_tasks = set()
+    failed_tasks = []
+    task_lock = Lock()
+    
+    def worker():
+        while True:
             try:
-                success = future.result()
-                if success:
-                    logger.info(f"Setting {setting} completed successfully for {game}")
-                else:
-                    logger.error(f"Setting {setting} failed for {game}")
+                # Get next task
+                setting, game, output_file = task_queue.get_nowait()
+                task_id = f"{setting}_{game}"
+                
+                # Run the task
+                success = run_single_setting(setting, game, model_name, output_file)
+                
+                # Update task status
+                with task_lock:
+                    if success:
+                        completed_tasks.add(task_id)
+                        logger.info(f"Task {task_id} completed successfully")
+                    else:
+                        failed_tasks.append((setting, game))
+                        logger.error(f"Task {task_id} failed")
+                
+                task_queue.task_done()
+            except Queue.Empty:
+                break
             except Exception as e:
-                logger.error(f"Error in Setting {setting} for {game}: {str(e)}")
+                logger.error(f"Worker error: {str(e)}")
+                task_queue.task_done()
+    
+    # Start workers
+    with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
+        # Submit initial batch of workers
+        futures = [executor.submit(worker) for _ in range(max_concurrent)]
+        
+        # Wait for all tasks to complete
+        task_queue.join()
+    
+    # Log final status
+    logger.info(f"All tasks completed. Success: {len(completed_tasks)}, Failed: {len(failed_tasks)}")
+    
+    # Retry failed tasks once
+    if failed_tasks:
+        logger.info(f"Retrying {len(failed_tasks)} failed tasks...")
+        for setting, game in failed_tasks:
+            output_file = os.path.join(output_dir, f"setting{setting}_{game}_{model_name}_retry_results.jsonl")
+            success = run_single_setting(setting, game, model_name, output_file)
+            if success:
+                logger.info(f"Retry successful for Setting {setting}, Game {game}")
+            else:
+                logger.error(f"Retry failed for Setting {setting}, Game {game}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Run experiment settings.")
+    parser = argparse.ArgumentParser(description="Run parallel evaluation of games and settings")
+    parser.add_argument("--model-path", type=str, required=True, help="Path to the model")
+    parser.add_argument("--port", type=int, default=8010, help="Port to serve the model on")
+    parser.add_argument("--gpu", type=int, default=1, help="Number of GPUs to use")
     parser.add_argument("--model-name", type=str, required=True, help="Name to serve the model as")
-    parser.add_argument("--game", type=str, required=True, help="Game to evaluate")
     parser.add_argument("--output-dir", type=str, required=True, help="Output directory path")
-    parser.add_argument("--max-workers", type=int, default=3, help="Maximum number of parallel settings")
+    parser.add_argument("--max-concurrent", type=int, default=9, help="Maximum number of concurrent tasks")
     args = parser.parse_args()
     
     logger.info(f"Starting experiment with arguments: {args}")
     
+    logger.info(f"Starting vLLM server for {args.model_name}...")
+    server_proc = start_vllm_server(args.model_path, args.model_name, port=args.port, gpu=args.gpu)
+    
     try:
-        run_parallel_settings(args.game, args.model_name, args.output_dir, args.max_workers)
-        logger.info("All settings completed successfully.")
+        run_parallel_evaluation(args.model_name, args.output_dir, args.max_concurrent)
+        logger.info("All evaluations completed successfully.")
     except Exception as e:
         logger.error(f"An error occurred: {e}", exc_info=True)
+    finally:
+        stop_vllm_server(server_proc)
 
 if __name__ == "__main__":
     main() 
