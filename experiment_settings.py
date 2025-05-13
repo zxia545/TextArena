@@ -447,6 +447,255 @@ def setting3_player0_teacher(player1_model_name: str, selected_games: List[str],
                     f.write("\n")
                 continue
 
+def setting4_combined_learning(player1_model_name: str, selected_games: List[str], output_file: str, num_rounds: int):
+    logger.info(f"Starting Setting 4 evaluation with Player1 model: {player1_model_name}")
+    agents = {
+        0: get_player0_agent(),
+        1: get_player1_agent(player1_model_name)
+    }
+    logger.info("Agents initialized successfully")
+
+    # Store game histories, player0 advice, and player1 learnings
+    game_histories = {game: [] for game in selected_games}
+    player0_advice = {game: [] for game in selected_games}
+    player1_learnings = {game: [] for game in selected_games}
+    game_scores = {game: [] for game in selected_games}
+    
+    def get_top_histories(game: str, num_histories: int = 3):
+        """Get the top N highest scored game histories"""
+        if len(game_scores[game]) <= num_histories:
+            return list(range(len(game_scores[game])))
+        
+        # Sort indices by score in descending order
+        sorted_indices = sorted(range(len(game_scores[game])), 
+                              key=lambda i: game_scores[game][i], 
+                              reverse=True)
+        return sorted_indices[:num_histories]
+
+    def create_history_prompt(game: str, top_indices: List[int]):
+        """Create a prompt containing the top game histories and their learnings"""
+        prompt = "Top Game Histories and Learnings:\n\n"
+        
+        for idx in top_indices:
+            prompt += f"Game {idx + 1}:\n"
+            prompt += f"Outcome: {game_histories[game][idx]['outcome']}\n"
+            
+            # Add Player 0's advice
+            prompt += "\nPlayer 0's Advice:\n"
+            prompt += f"{player0_advice[game][idx]}\n"
+            
+            # Add Player 1's learnings
+            prompt += "\nPlayer 1's Learnings:\n"
+            prompt += f"{player1_learnings[game][idx]}\n"
+            prompt += "-" * 50 + "\n"
+        
+        return prompt
+
+    def extract_score(response: str) -> float:
+        """Extract a score from the LLM response using regex"""
+        import re
+        # Try to find a number between 0 and 10
+        matches = re.findall(r'\b(?:10|[0-9])\b', response)
+        if matches:
+            try:
+                score = float(matches[0])
+                return max(0, min(10, score))  # Clamp between 0 and 10
+            except ValueError:
+                pass
+        return None  # Return None if no valid number found
+
+    def get_score_with_retry(agents, score_prompt, max_retries=3):
+        """Get score with retry mechanism"""
+        for attempt in range(max_retries):
+            try:
+                score_response = agents[1](score_prompt)
+                score = extract_score(score_response)
+                if score is not None:
+                    return score
+                
+                # If we didn't get a valid score, try a more direct prompt
+                if attempt < max_retries - 1:
+                    retry_prompt = (
+                        "I need you to provide a single number between 0 and 10. "
+                        "This number should represent the quality of the game history. "
+                        "Just respond with the number, nothing else."
+                    )
+                    retry_prompt = retry_prompt + "and the following is the game history: " "\n" + score_prompt
+                    score_response = agents[1](retry_prompt)
+                    score = extract_score(score_response)
+                    if score is not None:
+                        return score
+            except Exception as e:
+                logger.error(f"Error in score attempt {attempt + 1}: {str(e)}")
+                if attempt == max_retries - 1:
+                    return 0.0
+        return 0.0  # Default score if all retries fail
+
+    # Play each game num_rounds times
+    for game in selected_games:
+        logger.info(f"Starting {game} evaluation with {player1_model_name}")
+        for game_num in range(num_rounds):
+            try:
+                logger.info(f"Starting game {game_num + 1}/{num_rounds} for {game}")
+                env = ta.make(env_id=game)
+                env = ta.wrappers.LLMObservationWrapper(env=env)
+                env = ta.wrappers.SimpleRenderWrapper(
+                    env=env,
+                    player_names={0: "Player0", 1: "Player1"},
+                )
+                logger.debug(f"Environment created and configured for {game}")
+
+                # Add histories to the prompt if we have any games
+                if game_num > 0:
+                    top_indices = get_top_histories(game)
+                    history_prompt = create_history_prompt(game, top_indices)
+                    agents[1].system_prompt = history_prompt + "\n" + agents[1].system_prompt
+                    logger.debug("Added game histories to Player1's prompt")
+
+                env.reset(num_players=len(agents))
+                current_game_history = {
+                    "moves": [],
+                    "outcome": None
+                }
+                
+                done = False
+                move_count = 0
+                while not done:
+                    try:
+                        player_id, observation = env.get_observation()
+                        logger.debug(f"Player {player_id}'s turn - Move {move_count + 1}")
+                        action = agents[player_id](observation)
+                        logger.debug(f"Player {player_id} action: {action}")
+                        done, info = env.step(action=action)
+                        
+                        current_game_history["moves"].append({
+                            "player": player_id,
+                            "observation": observation,
+                            "action": action,
+                            "result": info.get("result", "No result recorded")
+                        })
+                        move_count += 1
+                    except Exception as e:
+                        logger.error(f"Error during game play: {str(e)}")
+                        done = True
+                        rewards = [0, 0]
+                        current_game_history["outcome"] = "Error"
+                        break
+                
+                rewards = env.close()
+                logger.info(f"Game {game_num + 1} completed. Rewards: Player0={rewards[0]}, Player1={rewards[1]}")
+                
+                # Record game outcome
+                if current_game_history["outcome"] != "Error":
+                    if rewards[0] > rewards[1]:
+                        current_game_history["outcome"] = "Player 0 won"
+                    elif rewards[1] > rewards[0]:
+                        current_game_history["outcome"] = "Player 1 won"
+                    else:
+                        current_game_history["outcome"] = "Draw"
+                logger.info(f"Game {game_num + 1} outcome: {current_game_history['outcome']}")
+                
+                # Get advice and learnings if game didn't error out
+                current_player0_advice = None
+                current_player1_learning = None
+                current_score = None
+                
+                if current_game_history["outcome"] != "Error":
+                    try:
+                        # Get Player 0's advice
+                        advice_prompt = (
+                            f"As a master teacher, analyze this game and provide advice for Player1.\n"
+                            f"Game outcome: {current_game_history['outcome']}\n"
+                            f"Move sequence: {json.dumps(current_game_history['moves'], indent=2)}\n\n"
+                            f"Provide advice in this format:\n"
+                            f"1. Strategic principles to follow\n"
+                            f"2. Specific moves to consider\n"
+                            f"3. Moves to avoid\n"
+                            f"4. Key patterns to watch for"
+                        )
+                        current_player0_advice = agents[0](advice_prompt)
+                        logger.debug(f"Generated Player 0 advice: {current_player0_advice[:200]}...")
+                        
+                        # Get Player 1's learnings
+                        learning_prompt = (
+                            f"Please analyze this game and provide key learnings for your future play.\n"
+                            f"Game outcome: {current_game_history['outcome']}\n"
+                            f"Move sequence: {json.dumps(current_game_history['moves'], indent=2)}\n\n"
+                            f"Provide learnings in this format:\n"
+                            f"1. Strategic principles to follow\n"
+                            f"2. Specific moves to consider\n"
+                            f"3. Moves to avoid\n"
+                            f"4. Key patterns to watch for"
+                        )
+                        current_player1_learning = agents[1](learning_prompt)
+                        logger.debug(f"Generated Player 1 learning: {current_player1_learning[:200]}...")
+                        
+                        # Get Player 1's score for this game history
+                        score_prompt = (
+                            f"Let's evaluate this game history and its educational value. I'll provide you with the game details and I want you to rate it on a scale of 0-10.\n\n"
+                            f"Game Details:\n"
+                            f"Outcome: {current_game_history['outcome']}\n"
+                            f"Move sequence: {json.dumps(current_game_history['moves'], indent=2)}\n\n"
+                            f"Learning Materials:\n"
+                            f"Player 0's advice: {current_player0_advice}\n"
+                            f"Your learnings: {current_player1_learning}\n\n"
+                            f"Please evaluate this game history based on:\n"
+                            f"1. Quality of gameplay and strategy execution\n"
+                            f"2. Educational value and actionable insights\n"
+                            f"3. Strategic depth and complexity\n"
+                            f"4. Overall impact on future gameplay\n\n"
+                            f"Provide only a number between 0 and 10."
+                        )
+                        current_score = get_score_with_retry(agents, score_prompt)
+                        logger.debug(f"Generated score after retries: {current_score}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error generating advice/learnings/score: {str(e)}")
+                        current_player0_advice = f"Error generating advice: {str(e)}"
+                        current_player1_learning = f"Error generating learning: {str(e)}"
+                        current_score = 0.0
+                
+                # Store results
+                game_histories[game].append(current_game_history)
+                player0_advice[game].append(current_player0_advice)
+                player1_learnings[game].append(current_player1_learning)
+                if current_score is not None:
+                    game_scores[game].append(current_score)
+                
+                # Log results
+                with open(output_file, "a") as f:
+                    json.dump({
+                        "game": game,
+                        "game_num": game_num,
+                        "rewards": rewards,
+                        "history": current_game_history,
+                        "player0_advice": current_player0_advice,
+                        "player1_learning": current_player1_learning,
+                        "score": current_score,
+                        "player0_model": "qwen2.5-32b-chat",
+                        "player1_model": player1_model_name,
+                        "error": None if current_game_history["outcome"] != "Error" else str(e)
+                    }, f)
+                    f.write("\n")
+                logger.debug(f"Results saved to {output_file}")
+            except Exception as e:
+                logger.error(f"Error in game {game_num + 1} of {game}: {str(e)}")
+                with open(output_file, "a") as f:
+                    json.dump({
+                        "game": game,
+                        "game_num": game_num,
+                        "rewards": [0, 0],
+                        "history": {"moves": [], "outcome": "Error"},
+                        "player0_advice": None,
+                        "player1_learning": None,
+                        "score": None,
+                        "player0_model": "qwen2.5-32b-chat",
+                        "player1_model": player1_model_name,
+                        "error": str(e)
+                    }, f)
+                    f.write("\n")
+                continue
+
 def run_single_setting(setting_num: int, game: str, model_name: str, output_file: str, num_rounds: int):
     """Run a single setting for a specific game"""
     logger.info(f"Starting Setting {setting_num} for game {game} with model {model_name}")
@@ -458,6 +707,8 @@ def run_single_setting(setting_num: int, game: str, model_name: str, output_file
             setting2_player1_with_history(model_name, [game], output_file, num_rounds)
         elif setting_num == 3:
             setting3_player0_teacher(model_name, [game], output_file, num_rounds)
+        elif setting_num == 4:
+            setting4_combined_learning(model_name, [game], output_file, num_rounds)
         else:
             raise ValueError(f"Invalid setting number: {setting_num}")
         
@@ -477,7 +728,7 @@ def run_parallel_evaluation(model_name: str, output_dir: str, max_concurrent: in
     # Create task queue with all combinations
     task_queue = Queue()
     for game in SELECTED_GAMES:
-        for setting in range(1, 4):
+        for setting in [4,2]:
             output_file = os.path.join(output_dir, f"setting{setting}_{game}_{model_name}_results.jsonl")
             task_queue.put((setting, game, output_file, num_rounds))
     
