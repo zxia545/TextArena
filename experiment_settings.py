@@ -1,6 +1,6 @@
 import textarena as ta
 import json
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import os
 import argparse
 import subprocess
@@ -12,6 +12,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 from threading import Lock
+import re
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', filename='experiment.log')
 logger = logging.getLogger(__name__)
@@ -227,12 +228,10 @@ def setting2_player1_with_history(player1_model_name: str, selected_games: List[
                         logger.debug(f"Player {player_id} action: {action}")
                         done, info = env.step(action=action)
                         
-                        # Record move with more context
                         current_game_history["moves"].append({
                             "player": player_id,
                             "observation": observation,
-                            "action": action,
-                            "result": info.get("result", "No result recorded")
+                            "action": action
                         })
                         move_count += 1
                     except Exception as e:
@@ -249,21 +248,30 @@ def setting2_player1_with_history(player1_model_name: str, selected_games: List[
                 if current_game_history["outcome"] != "Error":
                     if rewards[0] > rewards[1]:
                         current_game_history["outcome"] = "Player 0 won"
+                        winning_player = 0
                     elif rewards[1] > rewards[0]:
                         current_game_history["outcome"] = "Player 1 won"
+                        winning_player = 1
                     else:
                         current_game_history["outcome"] = "Draw"
+                        winning_player = None
                 logger.info(f"Game {game_num + 1} outcome: {current_game_history['outcome']}")
                 
                 # Generate key learnings from the game if it didn't error out
                 current_learning = None
-                if current_game_history["outcome"] != "Error":
+                if current_game_history["outcome"] != "Error" and current_game_history["moves"]:
                     try:
                         logger.info("Generating key learnings from the game")
+                        # Get the last move
+                        last_move = current_game_history["moves"][-1]
+                        
                         learning_prompt = (
                             f"Please analyze this game and provide key learnings for your future play.\n"
                             f"Game outcome: {current_game_history['outcome']}\n"
-                            f"Move sequence: {json.dumps(current_game_history['moves'], indent=2)}\n\n"
+                            f"Last move details:\n"
+                            f"Player: {last_move['player']}\n"
+                            f"Observation: {last_move['observation']}\n"
+                            f"Action taken: {last_move['action']}\n\n"
                             f"Provide learnings in this format:\n"
                             f"1. Strategic principles to follow\n"
                             f"2. Specific moves to consider\n"
@@ -363,19 +371,16 @@ def setting3_player0_teacher(player1_model_name: str, selected_games: List[str],
                         logger.debug(f"Player {player_id} action: {action}")
                         done, info = env.step(action=action)
                         
-                        # Record move with more context
                         current_game_history["moves"].append({
                             "player": player_id,
                             "observation": observation,
-                            "action": action,
-                            "result": info.get("result", "No result recorded")
+                            "action": action
                         })
                         move_count += 1
                     except Exception as e:
                         logger.error(f"Error during game play: {str(e)}")
-                        # If there's an error during gameplay, mark the game as done and move to next
                         done = True
-                        rewards = [0, 0]  # Default rewards for failed game
+                        rewards = [0, 0]
                         current_game_history["outcome"] = "Error"
                         break
                 
@@ -386,21 +391,30 @@ def setting3_player0_teacher(player1_model_name: str, selected_games: List[str],
                 if current_game_history["outcome"] != "Error":
                     if rewards[0] > rewards[1]:
                         current_game_history["outcome"] = "Player 0 won"
+                        winning_player = 0
                     elif rewards[1] > rewards[0]:
                         current_game_history["outcome"] = "Player 1 won"
+                        winning_player = 1
                     else:
                         current_game_history["outcome"] = "Draw"
+                        winning_player = None
                 logger.info(f"Game {game_num + 1} outcome: {current_game_history['outcome']}")
                 
                 # Generate key learnings from the game if it didn't error out
                 current_learning = None
-                if current_game_history["outcome"] != "Error":
+                if current_game_history["outcome"] != "Error" and current_game_history["moves"]:
                     try:
                         logger.info("Generating key learnings from the game")
+                        # Get the last move
+                        last_move = current_game_history["moves"][-1]
+                        
                         learning_prompt = (
                             f"As a master teacher, analyze this game and provide key learnings for Player1.\n"
                             f"Game outcome: {current_game_history['outcome']}\n"
-                            f"Move sequence: {json.dumps(current_game_history['moves'], indent=2)}\n\n"
+                            f"Last move details:\n"
+                            f"Player: {last_move['player']}\n"
+                            f"Observation: {last_move['observation']}\n"
+                            f"Action taken: {last_move['action']}\n\n"
                             f"Provide learnings in this format:\n"
                             f"1. Strategic principles to follow\n"
                             f"2. Specific moves to consider\n"
@@ -408,7 +422,7 @@ def setting3_player0_teacher(player1_model_name: str, selected_games: List[str],
                             f"4. Key patterns to watch for"
                         )
                         current_learning = agents[0](learning_prompt)
-                        logger.debug(f"Generated learnings: {current_learning[:200]}...")  # Log first 200 chars of learnings
+                        logger.debug(f"Generated learnings: {current_learning[:200]}...")
                         game_learnings[game].append(current_learning)
                     except Exception as e:
                         logger.error(f"Error generating learnings: {str(e)}")
@@ -455,82 +469,67 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
     }
     logger.info("Agents initialized successfully")
 
-    # Store game histories, player0 advice, and player1 learnings
+    # Store game histories, advice, learnings and scores
     game_histories = {game: [] for game in selected_games}
     player0_advice = {game: [] for game in selected_games}
     player1_learnings = {game: [] for game in selected_games}
     game_scores = {game: [] for game in selected_games}
     
-    def get_top_histories(game: str, num_histories: int = 3):
+    def get_top_histories(game: str, n: int = 3) -> List[Dict]:
         """Get the top N highest scored game histories"""
-        if len(game_scores[game]) <= num_histories:
-            return list(range(len(game_scores[game])))
+        if not game_scores[game]:
+            return []
         
-        # Sort indices by score in descending order
-        sorted_indices = sorted(range(len(game_scores[game])), 
-                              key=lambda i: game_scores[game][i], 
-                              reverse=True)
-        return sorted_indices[:num_histories]
-
-    def create_history_prompt(game: str, top_indices: List[int]):
-        """Create a prompt containing the top game histories and their learnings"""
-        prompt = "Top Game Histories and Learnings:\n\n"
+        # Sort games by score
+        sorted_games = sorted(
+            range(len(game_scores[game])),
+            key=lambda i: game_scores[game][i],
+            reverse=True
+        )
         
-        for idx in top_indices:
-            prompt += f"Game {idx + 1}:\n"
-            prompt += f"Outcome: {game_histories[game][idx]['outcome']}\n"
-            
-            # Add Player 0's advice
-            prompt += "\nPlayer 0's Advice:\n"
-            prompt += f"{player0_advice[game][idx]}\n"
-            
-            # Add Player 1's learnings
-            prompt += "\nPlayer 1's Learnings:\n"
-            prompt += f"{player1_learnings[game][idx]}\n"
-            prompt += "-" * 50 + "\n"
+        # Get top N games
+        top_indices = sorted_games[:n]
+        return [game_histories[game][i] for i in top_indices]
+    
+    def create_history_prompt(game: str) -> str:
+        """Create a prompt with the top game histories and their learnings"""
+        top_histories = get_top_histories(game)
+        if not top_histories:
+            return ""
         
+        prompt = "Previous successful games and their learnings:\n\n"
+        for i, history in enumerate(top_histories, 1):
+            prompt += f"Game {i}:\n"
+            if history["moves"]:
+                last_move = history["moves"][-1]
+                prompt += f"Last move:\n"
+                prompt += f"Player: {last_move['player']}\n"
+                prompt += f"Observation: {last_move['observation']}\n"
+                prompt += f"Action: {last_move['action']}\n"
+            prompt += f"Outcome: {history['outcome']}\n"
+            prompt += f"Score: {game_scores[game][i-1]}\n"
+            prompt += f"Learning: {player1_learnings[game][i-1]}\n\n"
         return prompt
-
-    def extract_score(response: str) -> float:
-        """Extract a score from the LLM response using regex"""
-        import re
-        # Try to find a number between 0 and 10
-        matches = re.findall(r'\b(?:10|[0-9])\b', response)
-        if matches:
-            try:
-                score = float(matches[0])
-                return max(0, min(10, score))  # Clamp between 0 and 10
-            except ValueError:
-                pass
-        return None  # Return None if no valid number found
-
-    def get_score_with_retry(agents, score_prompt, max_retries=3):
-        """Get score with retry mechanism"""
+    
+    def extract_score(response: str) -> Optional[int]:
+        """Extract score from LLM response using regex"""
+        match = re.search(r'(\d+)/10', response)
+        if match:
+            return int(match.group(1))
+        return None
+    
+    def get_score_with_retry(prompt: str, max_retries: int = 3) -> Optional[int]:
+        """Get score from Player1 with retry mechanism"""
         for attempt in range(max_retries):
             try:
-                score_response = agents[1](score_prompt)
-                score = extract_score(score_response)
+                response = agents[1](prompt)
+                score = extract_score(response)
                 if score is not None:
                     return score
-                
-                # If we didn't get a valid score, try a more direct prompt
-                if attempt < max_retries - 1:
-                    retry_prompt = (
-                        "I need you to provide a single number between 0 and 10. "
-                        "This number should represent the quality of the game history. "
-                        "Just respond with the number, nothing else."
-                    )
-                    retry_prompt = retry_prompt + "and the following is the game history: " "\n" + score_prompt
-                    score_response = agents[1](retry_prompt)
-                    score = extract_score(score_response)
-                    if score is not None:
-                        return score
             except Exception as e:
-                logger.error(f"Error in score attempt {attempt + 1}: {str(e)}")
-                if attempt == max_retries - 1:
-                    return 0.0
-        return 0.0  # Default score if all retries fail
-
+                logger.error(f"Error getting score (attempt {attempt + 1}): {str(e)}")
+        return None
+    
     # Play each game num_rounds times
     for game in selected_games:
         logger.info(f"Starting {game} evaluation with {player1_model_name}")
@@ -545,12 +544,13 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
                 )
                 logger.debug(f"Environment created and configured for {game}")
 
-                # Add histories to the prompt if we have any games
+                # Add previous successful games to Player1's prompt
                 if game_num > 0:
-                    top_indices = get_top_histories(game)
-                    history_prompt = create_history_prompt(game, top_indices)
-                    agents[1].system_prompt = history_prompt + "\n" + agents[1].system_prompt
-                    logger.debug("Added game histories to Player1's prompt")
+                    logger.info("Adding previous successful games to Player1's prompt")
+                    history_prompt = create_history_prompt(game)
+                    if history_prompt:
+                        agents[1].system_prompt = history_prompt + "\n" + agents[1].system_prompt
+                        logger.debug("History prompt added to Player1's system prompt")
 
                 env.reset(num_players=len(agents))
                 current_game_history = {
@@ -571,8 +571,7 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
                         current_game_history["moves"].append({
                             "player": player_id,
                             "observation": observation,
-                            "action": action,
-                            "result": info.get("result", "No result recorded")
+                            "action": action
                         })
                         move_count += 1
                     except Exception as e:
@@ -589,88 +588,80 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
                 if current_game_history["outcome"] != "Error":
                     if rewards[0] > rewards[1]:
                         current_game_history["outcome"] = "Player 0 won"
+                        winning_player = 0
                     elif rewards[1] > rewards[0]:
                         current_game_history["outcome"] = "Player 1 won"
+                        winning_player = 1
                     else:
                         current_game_history["outcome"] = "Draw"
+                        winning_player = None
                 logger.info(f"Game {game_num + 1} outcome: {current_game_history['outcome']}")
                 
-                # Get advice and learnings if game didn't error out
-                current_player0_advice = None
-                current_player1_learning = None
+                # Generate advice and learnings if game didn't error out
+                current_advice = None
+                current_learning = None
                 current_score = None
                 
-                if current_game_history["outcome"] != "Error":
+                if current_game_history["outcome"] != "Error" and current_game_history["moves"]:
                     try:
-                        # Get Player 0's advice
-                        advice_prompt = (
-                            f"As a master teacher, analyze this game and provide advice for Player1.\n"
+                        logger.info("Generating advice and learnings")
+                        # Get the last move
+                        last_move = current_game_history["moves"][-1]
+                        
+                        analysis_prompt = (
+                            f"Analyze this game and provide strategic advice.\n"
                             f"Game outcome: {current_game_history['outcome']}\n"
-                            f"Move sequence: {json.dumps(current_game_history['moves'], indent=2)}\n\n"
-                            f"Provide advice in this format:\n"
+                            f"Last move details:\n"
+                            f"Player: {last_move['player']}\n"
+                            f"Observation: {last_move['observation']}\n"
+                            f"Action taken: {last_move['action']}\n\n"
+                            f"Provide your analysis in this format:\n"
                             f"1. Strategic principles to follow\n"
                             f"2. Specific moves to consider\n"
                             f"3. Moves to avoid\n"
-                            f"4. Key patterns to watch for"
+                            f"4. Key patterns to watch for\n\n"
+                            f"Then rate the quality of this game on a scale of 0-10, where:\n"
+                            f"0-2: Poor - Basic mistakes, no strategy\n"
+                            f"3-4: Fair - Some good moves but inconsistent\n"
+                            f"5-6: Good - Solid play with clear strategy\n"
+                            f"7-8: Very Good - Strong tactical play\n"
+                            f"9-10: Excellent - Masterful play with perfect execution\n"
+                            f"End your response with 'Score: X/10' where X is your rating."
                         )
-                        current_player0_advice = agents[0](advice_prompt)
-                        logger.debug(f"Generated Player 0 advice: {current_player0_advice[:200]}...")
                         
-                        # Get Player 1's learnings
-                        learning_prompt = (
-                            f"Please analyze this game and provide key learnings for your future play.\n"
-                            f"Game outcome: {current_game_history['outcome']}\n"
-                            f"Move sequence: {json.dumps(current_game_history['moves'], indent=2)}\n\n"
-                            f"Provide learnings in this format:\n"
-                            f"1. Strategic principles to follow\n"
-                            f"2. Specific moves to consider\n"
-                            f"3. Moves to avoid\n"
-                            f"4. Key patterns to watch for"
-                        )
-                        current_player1_learning = agents[1](learning_prompt)
-                        logger.debug(f"Generated Player 1 learning: {current_player1_learning[:200]}...")
+                        # Get advice from Player0
+                        current_advice = agents[0](analysis_prompt)
+                        player0_advice[game].append(current_advice)
                         
-                        # Get Player 1's score for this game history
-                        score_prompt = (
-                            f"Let's evaluate this game history and its educational value. I'll provide you with the game details and I want you to rate it on a scale of 0-10.\n\n"
-                            f"Game Details:\n"
-                            f"Outcome: {current_game_history['outcome']}\n"
-                            f"Move sequence: {json.dumps(current_game_history['moves'], indent=2)}\n\n"
-                            f"Learning Materials:\n"
-                            f"Player 0's advice: {current_player0_advice}\n"
-                            f"Your learnings: {current_player1_learning}\n\n"
-                            f"Please evaluate this game history based on:\n"
-                            f"1. Quality of gameplay and strategy execution\n"
-                            f"2. Educational value and actionable insights\n"
-                            f"3. Strategic depth and complexity\n"
-                            f"4. Overall impact on future gameplay\n\n"
-                            f"Provide only a number between 0 and 10."
-                        )
-                        current_score = get_score_with_retry(agents, score_prompt)
-                        logger.debug(f"Generated score after retries: {current_score}")
+                        # Get learnings and score from Player1
+                        current_learning = agents[1](analysis_prompt)
+                        player1_learnings[game].append(current_learning)
                         
+                        # Extract score
+                        current_score = extract_score(current_learning)
+                        if current_score is not None:
+                            game_scores[game].append(current_score)
+                            logger.info(f"Game {game_num + 1} scored {current_score}/10")
+                        else:
+                            logger.warning(f"Could not extract score from Player1's response")
+                            game_scores[game].append(0)
                     except Exception as e:
-                        logger.error(f"Error generating advice/learnings/score: {str(e)}")
-                        current_player0_advice = f"Error generating advice: {str(e)}"
-                        current_player1_learning = f"Error generating learning: {str(e)}"
-                        current_score = 0.0
+                        logger.error(f"Error generating advice/learnings: {str(e)}")
+                        current_advice = f"Error generating advice: {str(e)}"
+                        current_learning = f"Error generating learnings: {str(e)}"
+                        game_scores[game].append(0)
                 
-                # Store results
                 game_histories[game].append(current_game_history)
-                player0_advice[game].append(current_player0_advice)
-                player1_learnings[game].append(current_player1_learning)
-                if current_score is not None:
-                    game_scores[game].append(current_score)
                 
-                # Log results
+                # Log results with model names
                 with open(output_file, "a") as f:
                     json.dump({
                         "game": game,
                         "game_num": game_num,
                         "rewards": rewards,
                         "history": current_game_history,
-                        "player0_advice": current_player0_advice,
-                        "player1_learning": current_player1_learning,
+                        "player0_advice": current_advice,
+                        "player1_learning": current_learning,
                         "score": current_score,
                         "player0_model": "qwen2.5-32b-chat",
                         "player1_model": player1_model_name,
@@ -680,6 +671,7 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
                 logger.debug(f"Results saved to {output_file}")
             except Exception as e:
                 logger.error(f"Error in game {game_num + 1} of {game}: {str(e)}")
+                # Log the error and continue with next game
                 with open(output_file, "a") as f:
                     json.dump({
                         "game": game,
@@ -728,7 +720,7 @@ def run_parallel_evaluation(model_name: str, output_dir: str, max_concurrent: in
     # Create task queue with all combinations
     task_queue = Queue()
     for game in SELECTED_GAMES:
-        for setting in [4,2]:
+        for setting in [4]:
             output_file = os.path.join(output_dir, f"setting{setting}_{game}_{model_name}_results.jsonl")
             task_queue.put((setting, game, output_file, num_rounds))
     
@@ -794,6 +786,7 @@ def main():
     parser.add_argument("--output-dir", type=str, required=True, help="Output directory path")
     parser.add_argument("--max-concurrent", type=int, default=9, help="Maximum number of concurrent tasks")
     parser.add_argument("--num-rounds", type=int, default=10, help="Number of rounds to play for each game")
+    # parser.add_argument("--tasks", type=str, default="all", help="Tasks to run")
     args = parser.parse_args()
     
     logger.info(f"Starting experiment with arguments: {args}")
