@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 #     "SecretMafia-v0"
 # ]
 
-# "Checkers-v0,Stratego-v0,TicTacToe-v0,TruthAndDeception-v0,SpellingBee-v0,SpiteAndMalice-v0,Tak-v0,WordChains-v0"
 # SELECTED_GAMES =[
 #     "SpellingBee-v0",
 #     "Poker-v0",
@@ -76,7 +75,7 @@ def get_player1_agent(model_name: str):
         model_name=model_name,
         api_base="http://localhost:8010/v1",
         api_key="your_api_key_here",
-        timeout=90
+        timeout=70
     )
 
 def get_player0_agent():
@@ -85,7 +84,7 @@ def get_player0_agent():
         model_name="qwen2.5-32b-chat",
         api_base="http://localhost:8020/v1",
         api_key="your_api_key_here",
-        timeout=90
+        timeout=70
     )
 
 
@@ -711,30 +710,7 @@ def run_single_setting(setting_num: int, game: str, model_name: str, output_file
         logger.error(f"Error in Setting {setting_num} for game {game}: {str(e)}")
         return False
 
-def parse_games_input(games_str: str) -> List[str]:
-    """Parse comma-separated games string into a list of games.
-    
-    Args:
-        games_str: Comma-separated string of games
-        
-    Returns:
-        List of game names with whitespace removed
-    """
-    if not games_str:
-        raise ValueError("Games input cannot be empty")
-    
-    # Split by comma and strip whitespace
-    games = [game.strip() for game in games_str.split(',')]
-    
-    # Remove any empty strings
-    games = [game for game in games if game]
-    
-    if not games:
-        raise ValueError("No valid games found in input")
-        
-    return games
-
-def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], max_concurrent: int = 9, num_rounds: int = 10):
+def run_parallel_evaluation(model_name: str, output_dir: str, max_concurrent: int = 9, num_rounds: int = 10, selected_game_mode_list=[]):
     """Run all games and settings in parallel with a maximum of concurrent tasks"""
     logger.info(f"Starting parallel evaluation with max {max_concurrent} concurrent tasks")
     
@@ -743,8 +719,8 @@ def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], 
     
     # Create task queue with all combinations
     task_queue = Queue()
-    for game in games:
-        for setting in [1,2,3]:
+    for game in SELECTED_GAMES:
+        for setting in selected_game_mode_list:
             output_file = os.path.join(output_dir, f"setting{setting}_{game}_{model_name}_results.jsonl")
             task_queue.put((setting, game, output_file, num_rounds))
     
@@ -810,24 +786,17 @@ def main():
     parser.add_argument("--output-dir", type=str, required=True, help="Output directory path")
     parser.add_argument("--max-concurrent", type=int, default=9, help="Maximum number of concurrent tasks")
     parser.add_argument("--num-rounds", type=int, default=10, help="Number of rounds to play for each game")
-    parser.add_argument("--games", type=str, required=True, help="Comma-separated list of games to evaluate (e.g. 'TicTacToe-v0,Poker-v0')")
+    parser.add_argument("--select_mode", type=str, default="1,2,3,4", help="Number of games to run")
+    # parser.add_argument("--tasks", type=str, default="all", help="Tasks to run")
     args = parser.parse_args()
     
     logger.info(f"Starting experiment with arguments: {args}")
     
-    # Parse games input
-    try:
-        selected_games = parse_games_input(args.games)
-        logger.info(f"Parsed games: {selected_games}")
-    except ValueError as e:
-        logger.error(f"Error parsing games input: {str(e)}")
-        sys.exit(1)
-    
     logger.info(f"Starting vLLM server for {args.model_name}...")
     server_proc = start_vllm_server(args.model_path, args.model_name, port=args.port, gpu=args.gpu)
-    
+    selected_game_mode_list = args.select_mode.split(",")
     try:
-        run_parallel_evaluation(args.model_name, args.output_dir, selected_games, args.max_concurrent, args.num_rounds)
+        run_parallel_evaluation(args.model_name, args.output_dir, args.max_concurrent, args.num_rounds, selected_game_mode_list)
         logger.info("All evaluations completed successfully.")
     except Exception as e:
         logger.error(f"An error occurred: {e}", exc_info=True)

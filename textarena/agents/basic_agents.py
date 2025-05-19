@@ -16,6 +16,7 @@ __all__ = [
     "AWSBedrockAgent",
     "AnthropicAgent",
     "Qwen3Agent",
+    "AzureOpenAIAgent",
 ]
 
 
@@ -773,3 +774,136 @@ class Qwen3Agent(OpenRouterAgent):
             response = response.split('</think>')[-1].strip()
         
         return response
+
+class AzureOpenAIAgent(Agent):
+    """ Agent class using the Azure OpenAI API to generate responses. """
+    def __init__(self, model_name: str, system_prompt: Optional[str] = STANDARD_GAME_PROMPT, verbose: bool = False, 
+                 azure_endpoint: Optional[str] = None, api_version: str = "2025-01-01-preview", **kwargs):
+        """
+        Initialize the Azure OpenAI agent.
+
+        Args:
+            model_name (str): The name of the model.
+            system_prompt (Optional[str]): The system prompt to use (default: STANDARD_GAME_PROMPT)
+            verbose (bool): If True, additional debug info will be printed.
+            azure_endpoint (Optional[str]): The Azure OpenAI endpoint URL.
+            api_version (str): The Azure OpenAI API version.
+            **kwargs: Additional keyword arguments to pass to the Azure OpenAI API call.
+        """
+        super().__init__()
+        self.model_name = model_name 
+        self.verbose = verbose 
+        self.system_prompt = system_prompt
+        self.kwargs = kwargs
+        self._current_request = None
+
+        try:
+            from openai import AzureOpenAI
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider, AzureCliCredential
+        except ImportError:
+            raise ImportError(
+                "Azure OpenAI and Azure Identity packages are required for AzureOpenAIAgent. "
+                "Install them with: pip install openai azure-identity"
+            )
+
+        # Use provided Azure endpoint or get from environment variable
+        # if azure_endpoint is None:
+        #     azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+        #     if not azure_endpoint:
+        #         raise ValueError("Azure OpenAI endpoint not found. Please set the AZURE_OPENAI_ENDPOINT environment variable or provide it directly.")
+
+        ## you may need to install: pip install httpx==0.27.2 
+        credential = AzureCliCredential()    
+
+        token_provider = get_bearer_token_provider(
+            credential,
+            "https://cognitiveservices.azure.com/.default"
+        ) 
+
+        # client = AzureOpenAI(
+        #     azure_endpoint = "https://sc-ol-m2y79f1q-japaneast.openai.azure.com/",
+        #     azure_ad_token_provider=token_provider,
+        #     api_version="2025-01-01-preview"
+        # )
+        # # Set up Azure credentials
+        # credential = AzureCliCredential()
+        # token_provider = get_bearer_token_provider(
+        #     credential,
+        #     "https://cognitiveservices.azure.com/.default"
+        # )
+        
+        self.client = AzureOpenAI(
+            azure_endpoint = "https://sc-ol-m2y79f1q-japaneast.openai.azure.com/",
+            azure_ad_token_provider=token_provider,
+            api_version="2025-01-01-preview"
+        )
+
+    def _make_request(self, observation: str) -> str:
+        """ Make a single API request to Azure OpenAI and return the generated message. """
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": observation}
+        ]
+
+        # Cancel any existing request
+        if self._current_request is not None:
+            try:
+                self._current_request.cancel()
+            except:
+                pass
+
+        try:
+            # Create a new request
+            self._current_request = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                # n=1,
+                **self.kwargs
+            )
+            response = self._current_request
+            self._current_request = None
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            self._current_request = None
+            raise e
+
+    def _retry_request(self, observation: str, retries: int = 3, delay: int = 5) -> str:
+        """
+        Attempt to make an API request with retries.
+
+        Args:
+            observation (str): The input to process.
+            retries (int): The number of attempts to try (default: 3).
+            delay (int): Seconds to wait between attempts.
+
+        Raises:
+            Exception: The last exception caught if all retries fail.
+        """
+        last_exception = None
+        for attempt in range(1, retries + 1):
+            try:
+                response = self._make_request(observation)
+                if self.verbose:
+                    print(f"\nObservation: {observation}\nResponse: {response}")
+                return response
+
+            except Exception as e:
+                last_exception = e
+                print(f"Attempt {attempt} failed with error: {e}")
+                if attempt < retries:
+                    time.sleep(delay)
+        raise last_exception
+
+    def __call__(self, observation: str) -> str:
+        """
+        Process the observation using the Azure OpenAI API and return the action.
+
+        Args:
+            observation (str): The input string to process.
+
+        Returns:
+            str: The generated response.
+        """
+        if not isinstance(observation, str):
+            raise ValueError(f"Observation must be a string. Received type: {type(observation)}")
+        return self._retry_request(observation)

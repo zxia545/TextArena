@@ -9,6 +9,7 @@ from textarena.agents.basic_agents import (
     AWSBedrockAgent,
     AnthropicAgent,
     AsyncAnthropicAgent,
+    AzureOpenAIAgent
 )
 
 from textarena.agents import wrappers
@@ -24,4 +25,5 @@ __all__ = [
     "AWSBedrockAgent",
     "AnthropicAgent",
     "AsyncAnthropicAgent",
+    "AzureOpenAIAgent"
 ]

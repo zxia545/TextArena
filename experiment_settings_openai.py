@@ -3,18 +3,15 @@ import json
 from typing import Dict, List, Tuple, Optional
 import os
 import argparse
-import subprocess
 import sys
 import time
-from this_utils import start_vllm_server, stop_vllm_server
-from textarena.agents.basic_agents import Qwen3Agent
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 from threading import Lock
 import re
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', filename='experiment.log')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', filename='experiment_openai.log')
 logger = logging.getLogger(__name__)
 
 # # Selected games for evaluation
@@ -29,7 +26,6 @@ logger = logging.getLogger(__name__)
 #     "SecretMafia-v0"
 # ]
 
-# "Checkers-v0,Stratego-v0,TicTacToe-v0,TruthAndDeception-v0,SpellingBee-v0,SpiteAndMalice-v0,Tak-v0,WordChains-v0"
 # SELECTED_GAMES =[
 #     "SpellingBee-v0",
 #     "Poker-v0",
@@ -72,11 +68,11 @@ SELECTED_GAMES = [
 
 def get_player1_agent(model_name: str):
     """Helper function to create Player 1 agent with specified model"""
-    return ta.agents.OpenRouterAgent(
+    return ta.agents.AzureOpenAIAgent(
         model_name=model_name,
-        api_base="http://localhost:8010/v1",
-        api_key="your_api_key_here",
-        timeout=90
+        verbose=True,
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+        api_version="2025-01-01-preview"
     )
 
 def get_player0_agent():
@@ -744,7 +740,7 @@ def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], 
     # Create task queue with all combinations
     task_queue = Queue()
     for game in games:
-        for setting in [1,2,3]:
+        for setting in [4]:
             output_file = os.path.join(output_dir, f"setting{setting}_{game}_{model_name}_results.jsonl")
             task_queue.put((setting, game, output_file, num_rounds))
     
@@ -803,10 +799,7 @@ def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], 
 
 def main():
     parser = argparse.ArgumentParser(description="Run parallel evaluation of games and settings")
-    parser.add_argument("--model-path", type=str, required=True, help="Path to the model")
-    parser.add_argument("--port", type=int, default=8010, help="Port to serve the model on")
-    parser.add_argument("--gpu", type=int, default=1, help="Number of GPUs to use")
-    parser.add_argument("--model-name", type=str, required=True, help="Name to serve the model as")
+    parser.add_argument("--model-name", type=str, required=True, help="Name of the Azure OpenAI model to use")
     parser.add_argument("--output-dir", type=str, required=True, help="Output directory path")
     parser.add_argument("--max-concurrent", type=int, default=9, help="Maximum number of concurrent tasks")
     parser.add_argument("--num-rounds", type=int, default=10, help="Number of rounds to play for each game")
@@ -823,16 +816,11 @@ def main():
         logger.error(f"Error parsing games input: {str(e)}")
         sys.exit(1)
     
-    logger.info(f"Starting vLLM server for {args.model_name}...")
-    server_proc = start_vllm_server(args.model_path, args.model_name, port=args.port, gpu=args.gpu)
-    
     try:
         run_parallel_evaluation(args.model_name, args.output_dir, selected_games, args.max_concurrent, args.num_rounds)
         logger.info("All evaluations completed successfully.")
     except Exception as e:
         logger.error(f"An error occurred: {e}", exc_info=True)
-    finally:
-        stop_vllm_server(server_proc)
 
 if __name__ == "__main__":
     main() 

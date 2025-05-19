@@ -184,3 +184,6 @@ results/
 
 results_qwen2.5_32b/
 
+result*/
+
+host*.sh
