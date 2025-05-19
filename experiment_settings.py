@@ -734,7 +734,33 @@ def parse_games_input(games_str: str) -> List[str]:
         
     return games
 
-def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], max_concurrent: int = 9, num_rounds: int = 10):
+def parse_settings_input(settings_str: str) -> List[int]:
+    """Parse comma-separated settings string into a list of integers.
+    
+    Args:
+        settings_str: Comma-separated string of settings (e.g. '1,2,3')
+        
+    Returns:
+        List of setting numbers
+    """
+    if not settings_str:
+        raise ValueError("Settings input cannot be empty")
+    
+    try:
+        # Split by comma and convert to integers
+        settings = [int(setting.strip()) for setting in settings_str.split(',')]
+        
+        # Validate settings
+        valid_settings = {1, 2, 3, 4}
+        invalid_settings = [s for s in settings if s not in valid_settings]
+        if invalid_settings:
+            raise ValueError(f"Invalid settings found: {invalid_settings}. Valid settings are: {sorted(valid_settings)}")
+        
+        return settings
+    except ValueError as e:
+        raise ValueError(f"Error parsing settings: {str(e)}")
+
+def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], settings: List[int], max_concurrent: int = 9, num_rounds: int = 10):
     """Run all games and settings in parallel with a maximum of concurrent tasks"""
     logger.info(f"Starting parallel evaluation with max {max_concurrent} concurrent tasks")
     
@@ -744,7 +770,7 @@ def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], 
     # Create task queue with all combinations
     task_queue = Queue()
     for game in games:
-        for setting in [1,2,3]:
+        for setting in settings:
             output_file = os.path.join(output_dir, f"setting{setting}_{game}_{model_name}_results.jsonl")
             task_queue.put((setting, game, output_file, num_rounds))
     
@@ -811,6 +837,7 @@ def main():
     parser.add_argument("--max-concurrent", type=int, default=9, help="Maximum number of concurrent tasks")
     parser.add_argument("--num-rounds", type=int, default=10, help="Number of rounds to play for each game")
     parser.add_argument("--games", type=str, required=True, help="Comma-separated list of games to evaluate (e.g. 'TicTacToe-v0,Poker-v0')")
+    parser.add_argument("--settings", type=str, default="1,2,3", help="Comma-separated list of settings to run (e.g. '1,2,3' or '2,3' or '1')")
     args = parser.parse_args()
     
     logger.info(f"Starting experiment with arguments: {args}")
@@ -823,11 +850,19 @@ def main():
         logger.error(f"Error parsing games input: {str(e)}")
         sys.exit(1)
     
+    # Parse settings input
+    try:
+        selected_settings = parse_settings_input(args.settings)
+        logger.info(f"Parsed settings: {selected_settings}")
+    except ValueError as e:
+        logger.error(f"Error parsing settings input: {str(e)}")
+        sys.exit(1)
+    
     logger.info(f"Starting vLLM server for {args.model_name}...")
     server_proc = start_vllm_server(args.model_path, args.model_name, port=args.port, gpu=args.gpu)
     
     try:
-        run_parallel_evaluation(args.model_name, args.output_dir, selected_games, args.max_concurrent, args.num_rounds)
+        run_parallel_evaluation(args.model_name, args.output_dir, selected_games, selected_settings, args.max_concurrent, args.num_rounds)
         logger.info("All evaluations completed successfully.")
     except Exception as e:
         logger.error(f"An error occurred: {e}", exc_info=True)
