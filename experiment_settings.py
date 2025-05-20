@@ -76,7 +76,7 @@ def get_player1_agent(model_name: str):
         model_name=model_name,
         api_base="http://localhost:8010/v1",
         api_key="your_api_key_here",
-        timeout=90
+        timeout=120
     )
 
 def get_player0_agent():
@@ -85,7 +85,7 @@ def get_player0_agent():
         model_name="qwen2.5-32b-chat",
         api_base="http://localhost:8020/v1",
         api_key="your_api_key_here",
-        timeout=90
+        timeout=120
     )
 
 
@@ -462,7 +462,7 @@ def setting3_player0_teacher(player1_model_name: str, selected_games: List[str],
                     f.write("\n")
                 continue
 
-def setting4_combined_learning(player1_model_name: str, selected_games: List[str], output_file: str, num_rounds: int):
+def setting4_combined_learning(player1_model_name: str, selected_games: List[str], output_file: str, num_rounds: int, history_limit: Optional[int] = None):
     logger.info(f"Starting Setting 4 evaluation with Player1 model: {player1_model_name}")
     agents = {
         0: get_player0_agent(),
@@ -477,13 +477,18 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
     game_scores = {game: [] for game in selected_games}
     
     def get_top_histories(game: str, n: int = 3) -> List[Dict]:
-        """Get the top N highest scored game histories"""
+        """Get the top N highest scored game histories from before the history limit"""
         if not game_scores[game]:
             return []
         
+        # Only consider games before history limit
+        valid_indices = range(len(game_scores[game]))
+        if history_limit is not None:
+            valid_indices = range(min(history_limit, len(game_scores[game])))
+        
         # Sort games by score
         sorted_games = sorted(
-            range(len(game_scores[game])),
+            valid_indices,
             key=lambda i: game_scores[game][i],
             reverse=True
         )
@@ -493,7 +498,7 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
         return [game_histories[game][i] for i in top_indices]
     
     def create_history_prompt(game: str) -> str:
-        """Create a prompt with the top game histories and their learnings"""
+        """Create a prompt with the top game histories and their learnings from before the history limit"""
         top_histories = get_top_histories(game)
         if not top_histories:
             return ""
@@ -598,59 +603,63 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
                         winning_player = None
                 logger.info(f"Game {game_num + 1} outcome: {current_game_history['outcome']}")
                 
-                # Generate advice and learnings if game didn't error out
+                # Initialize variables for advice and learnings
                 current_advice = None
                 current_learning = None
                 current_score = None
                 
-                if current_game_history["outcome"] != "Error" and current_game_history["moves"]:
-                    try:
-                        logger.info("Generating advice and learnings")
-                        # Get the last move
-                        last_move = current_game_history["moves"][-1]
-                        
-                        analysis_prompt = (
-                            f"Analyze this game and provide strategic advice.\n"
-                            f"Game outcome: {current_game_history['outcome']}\n"
-                            f"Last move details:\n"
-                            f"Player: {last_move['player']}\n"
-                            f"Observation: {last_move['observation']}\n"
-                            f"Action taken: {last_move['action']}\n\n"
-                            f"Provide your analysis in this format:\n"
-                            f"1. Strategic principles to follow\n"
-                            f"2. Specific moves to consider\n"
-                            f"3. Moves to avoid\n"
-                            f"4. Key patterns to watch for\n\n"
-                            f"Then rate the quality of this game on a scale of 0-10, where:\n"
-                            f"0-2: Poor - Basic mistakes, no strategy\n"
-                            f"3-4: Fair - Some good moves but inconsistent\n"
-                            f"5-6: Good - Solid play with clear strategy\n"
-                            f"7-8: Very Good - Strong tactical play\n"
-                            f"9-10: Excellent - Masterful play with perfect execution\n"
-                            f"End your response with 'Score: X/10' where X is your rating."
-                        )
-                        
-                        # Get advice from Player0
-                        current_advice = agents[0](analysis_prompt)
-                        player0_advice[game].append(current_advice)
-                        
-                        # Get learnings and score from Player1
-                        current_learning = agents[1](analysis_prompt)
-                        player1_learnings[game].append(current_learning)
-                        
-                        # Extract score
-                        current_score = extract_score(current_learning)
-                        if current_score is not None:
-                            game_scores[game].append(current_score)
-                            logger.info(f"Game {game_num + 1} scored {current_score}/10")
-                        else:
-                            logger.warning(f"Could not extract score from Player1's response")
+                # Only generate learnings if we haven't reached the history limit
+                if history_limit is None or game_num < history_limit:
+                    if current_game_history["outcome"] != "Error" and current_game_history["moves"]:
+                        try:
+                            logger.info("Generating advice and learnings")
+                            # Get the last move
+                            last_move = current_game_history["moves"][-1]
+                            
+                            analysis_prompt = (
+                                f"Analyze this game and provide strategic advice.\n"
+                                f"Game outcome: {current_game_history['outcome']}\n"
+                                f"Last move details:\n"
+                                f"Player: {last_move['player']}\n"
+                                f"Observation: {last_move['observation']}\n"
+                                f"Action taken: {last_move['action']}\n\n"
+                                f"Provide your analysis in this format:\n"
+                                f"1. Strategic principles to follow\n"
+                                f"2. Specific moves to consider\n"
+                                f"3. Moves to avoid\n"
+                                f"4. Key patterns to watch for\n\n"
+                                f"Then rate the quality of this game on a scale of 0-10, where:\n"
+                                f"0-2: Poor - Basic mistakes, no strategy\n"
+                                f"3-4: Fair - Some good moves but inconsistent\n"
+                                f"5-6: Good - Solid play with clear strategy\n"
+                                f"7-8: Very Good - Strong tactical play\n"
+                                f"9-10: Excellent - Masterful play with perfect execution\n"
+                                f"End your response with 'Score: X/10' where X is your rating."
+                            )
+                            
+                            # Get advice from Player0
+                            current_advice = agents[0](analysis_prompt)
+                            player0_advice[game].append(current_advice)
+                            
+                            # Get learnings and score from Player1
+                            current_learning = agents[1](analysis_prompt)
+                            player1_learnings[game].append(current_learning)
+                            
+                            # Extract score
+                            current_score = extract_score(current_learning)
+                            if current_score is not None:
+                                game_scores[game].append(current_score)
+                                logger.info(f"Game {game_num + 1} scored {current_score}/10")
+                            else:
+                                logger.warning(f"Could not extract score from Player1's response")
+                                game_scores[game].append(0)
+                        except Exception as e:
+                            logger.error(f"Error generating advice/learnings: {str(e)}")
+                            current_advice = f"Error generating advice: {str(e)}"
+                            current_learning = f"Error generating learnings: {str(e)}"
                             game_scores[game].append(0)
-                    except Exception as e:
-                        logger.error(f"Error generating advice/learnings: {str(e)}")
-                        current_advice = f"Error generating advice: {str(e)}"
-                        current_learning = f"Error generating learnings: {str(e)}"
-                        game_scores[game].append(0)
+                else:
+                    logger.info(f"Past history limit ({history_limit}), skipping learning generation for game {game_num + 1}")
                 
                 game_histories[game].append(current_game_history)
                 
@@ -689,7 +698,7 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
                     f.write("\n")
                 continue
 
-def run_single_setting(setting_num: int, game: str, model_name: str, output_file: str, num_rounds: int):
+def run_single_setting(setting_num: int, game: str, model_name: str, output_file: str, num_rounds: int, history_limit: Optional[int] = None):
     """Run a single setting for a specific game"""
     logger.info(f"Starting Setting {setting_num} for game {game} with model {model_name}")
     
@@ -701,7 +710,7 @@ def run_single_setting(setting_num: int, game: str, model_name: str, output_file
         elif setting_num == 3:
             setting3_player0_teacher(model_name, [game], output_file, num_rounds)
         elif setting_num == 4:
-            setting4_combined_learning(model_name, [game], output_file, num_rounds)
+            setting4_combined_learning(model_name, [game], output_file, num_rounds, history_limit)
         else:
             raise ValueError(f"Invalid setting number: {setting_num}")
         
@@ -760,7 +769,7 @@ def parse_settings_input(settings_str: str) -> List[int]:
     except ValueError as e:
         raise ValueError(f"Error parsing settings: {str(e)}")
 
-def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], settings: List[int], max_concurrent: int = 9, num_rounds: int = 10):
+def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], settings: List[int], max_concurrent: int = 9, num_rounds: int = 10, history_limit: Optional[int] = None):
     """Run all games and settings in parallel with a maximum of concurrent tasks"""
     logger.info(f"Starting parallel evaluation with max {max_concurrent} concurrent tasks")
     
@@ -772,7 +781,7 @@ def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], 
     for game in games:
         for setting in settings:
             output_file = os.path.join(output_dir, f"setting{setting}_{game}_{model_name}_results.jsonl")
-            task_queue.put((setting, game, output_file, num_rounds))
+            task_queue.put((setting, game, output_file, num_rounds, history_limit))
     
     # Track completed and failed tasks
     completed_tasks = set()
@@ -783,11 +792,11 @@ def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], 
         while True:
             try:
                 # Get next task
-                setting, game, output_file, num_rounds = task_queue.get_nowait()
+                setting, game, output_file, num_rounds, history_limit = task_queue.get_nowait()
                 task_id = f"{setting}_{game}"
                 
                 # Run the task
-                success = run_single_setting(setting, game, model_name, output_file, num_rounds)
+                success = run_single_setting(setting, game, model_name, output_file, num_rounds, history_limit)
                 
                 # Update task status
                 with task_lock:
@@ -821,7 +830,7 @@ def run_parallel_evaluation(model_name: str, output_dir: str, games: List[str], 
         logger.info(f"Retrying {len(failed_tasks)} failed tasks...")
         for setting, game in failed_tasks:
             output_file = os.path.join(output_dir, f"setting{setting}_{game}_{model_name}_retry_results.jsonl")
-            success = run_single_setting(setting, game, model_name, output_file, num_rounds)
+            success = run_single_setting(setting, game, model_name, output_file, num_rounds, history_limit)
             if success:
                 logger.info(f"Retry successful for Setting {setting}, Game {game}")
             else:
@@ -838,6 +847,7 @@ def main():
     parser.add_argument("--num-rounds", type=int, default=10, help="Number of rounds to play for each game")
     parser.add_argument("--games", type=str, required=True, help="Comma-separated list of games to evaluate (e.g. 'TicTacToe-v0,Poker-v0')")
     parser.add_argument("--settings", type=str, default="1,2,3", help="Comma-separated list of settings to run (e.g. '1,2,3' or '2,3' or '1')")
+    parser.add_argument("--history-limit", type=int, help="Limit the number of rounds to keep history for (only applies to setting 4)")
     args = parser.parse_args()
     
     logger.info(f"Starting experiment with arguments: {args}")
@@ -862,7 +872,7 @@ def main():
     server_proc = start_vllm_server(args.model_path, args.model_name, port=args.port, gpu=args.gpu)
     
     try:
-        run_parallel_evaluation(args.model_name, args.output_dir, selected_games, selected_settings, args.max_concurrent, args.num_rounds)
+        run_parallel_evaluation(args.model_name, args.output_dir, selected_games, selected_settings, args.max_concurrent, args.num_rounds, args.history_limit)
         logger.info("All evaluations completed successfully.")
     except Exception as e:
         logger.error(f"An error occurred: {e}", exc_info=True)
