@@ -14,7 +14,7 @@ from queue import Queue
 from threading import Lock
 import re
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', filename='experiment.log')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filename=f'logs/experiment_{time.strftime("%Y%m%d_%H%M%S")}.log')
 logger = logging.getLogger(__name__)
 
 # # Selected games for evaluation
@@ -584,26 +584,6 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
     history_prompts = {game: [] for game in selected_games}
     game_summaries = {}  # Store game summaries
     
-    def get_top_histories(game: str, n: int = 3) -> List[Dict]:
-        """Get the top N highest scored game histories from before the history limit"""
-        if not game_scores[game]:
-            return []
-        
-        # Only consider games before history limit
-        valid_indices = range(len(game_scores[game]))
-        if history_limit is not None:
-            valid_indices = range(min(history_limit, len(game_scores[game])))
-        
-        # Sort games by score
-        sorted_games = sorted(
-            valid_indices,
-            key=lambda i: game_scores[game][i],
-            reverse=True
-        )
-        
-        # Get top N games
-        top_indices = sorted_games[:n]
-        return [game_histories[game][i] for i in top_indices]
     
     def create_history_prompt(game: str) -> str:
         """Create a prompt with the top game histories and their learnings from before the history limit"""
@@ -624,26 +604,97 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
         
         if not top_indices:
             return ""
-            
-        prompt = "Review of previous successful games advice and learnings to inform your strategy:\n\n"
-        for i, idx in enumerate(top_indices, 1):
-            # Skip the game summary with observations and just include game number
-            prompt += f"Game {i} Key Learnings and Advice:\n"
-            
-            # Combine Player 0's advice and Player 1's learning
-            advice0 = player0_advice[game][idx]
-            advice1 = player1_advice[game][idx]
-
-            if advice0 and not "Error generating advice" in advice0:
-                prompt += f"  - Expert Advice: {advice0}\n"
-            if advice1 and not "Error generating advice" in advice1:
-                prompt += f"  - Player Analysis: {advice1}\n"
-            
-            if not (advice0 and not "Error generating advice" in advice0) and not (advice1 and not "Error generating advice" in advice1):
-                prompt += f"  No specific learnings or advice recorded for Game {i}.\n"
-            
-            prompt += "\n"
         
+        # Collect advice from top games for both players
+        player0_advice_list = []
+        player1_advice_list = []
+        
+        for idx in top_indices:
+            p0_advice = player0_advice[game][idx]
+            p1_advice = player1_advice[game][idx]
+            
+            # Only include valid advice
+            if p0_advice and not "Error generating advice" in p0_advice:
+                player0_advice_list.append(p0_advice)
+            
+            if p1_advice and not "Error generating advice" in p1_advice:
+                player1_advice_list.append(p1_advice)
+        
+        # If we have no valid advice, return empty prompt
+        if not player0_advice_list and not player1_advice_list:
+            return ""
+            
+        # Have each agent combine their respective advice
+        combined_p0_advice = ""
+        combined_p1_advice = ""
+        
+        try:
+            # Combine Player 0's advice if any exists
+            if player0_advice_list:
+                # Save original system prompt
+                original_p0_prompt = agents[0].system_prompt
+                try:
+                    # Set system prompt for combining advice
+                    agents[0].system_prompt = "You are an expert game strategist. Synthesize these previous pieces of advice into a single coherent strategic guide. Focus on common themes, contradictory advice to resolve, and the most important strategic principles. Keep your response under 300 words."
+                    
+                    # Create prompt for combining advice
+                    p0_combine_prompt = f"You've provided the following advice about the game {game} from your previous analysis. Combine and synthesize this advice into a single coherent strategic guide:\n\n"
+                    for i, advice in enumerate(player0_advice_list, 1):
+                        p0_combine_prompt += f"Advice #{i}:\n{advice}\n\n"
+                    p0_combine_prompt += "Synthesize the above advice into a single coherent strategic guide with your most important recommendations. Keep your response under 300 words."
+                    
+                    # Get combined advice
+                    combined_p0_advice = agents[0](p0_combine_prompt)
+                finally:
+                    # Restore original system prompt
+                    agents[0].system_prompt = original_p0_prompt
+            
+            # Combine Player 1's advice if any exists
+            if player1_advice_list:
+                # Save original system prompt
+                original_p1_prompt = agents[1].system_prompt
+                try:
+                    # Set system prompt for combining advice
+                    agents[1].system_prompt = "You are analyzing your own gameplay across multiple matches. Synthesize your previous insights into a single coherent learning summary. Focus on the most important patterns and strategies you've identified. Keep your response under 300 words."
+                    
+                    # Create prompt for combining advice
+                    p1_combine_prompt = f"You've provided the following self-analysis about your gameplay in {game}. Combine and synthesize this analysis into a single coherent learning summary:\n\n"
+                    for i, advice in enumerate(player1_advice_list, 1):
+                        p1_combine_prompt += f"Analysis #{i}:\n{advice}\n\n"
+                    p1_combine_prompt += "Synthesize the above self-analysis into a single coherent learning summary with your most important insights. Keep your response under 300 words."
+                    
+                    # Get combined advice
+                    combined_p1_advice = agents[1](p1_combine_prompt)
+                finally:
+                    # Restore original system prompt
+                    agents[1].system_prompt = original_p1_prompt
+        
+        except Exception as e:
+            logger.error(f"Error combining advice: {str(e)}")
+            # Fall back to the original implementation in case of error
+            prompt = "Review of previous successful games advice and learnings to inform your strategy:\n\n"
+            for i, idx in enumerate(top_indices, 1):
+                prompt += f"Game {i} Key Learnings and Advice:\n"
+                advice0 = player0_advice[game][idx]
+                advice1 = player1_advice[game][idx]
+                if advice0 and not "Error generating advice" in advice0:
+                    prompt += f"  - Expert Advice: {advice0}\n"
+                if advice1 and not "Error generating advice" in advice1:
+                    prompt += f"  - Player Analysis: {advice1}\n"
+                if not (advice0 and not "Error generating advice" in advice0) and not (advice1 and not "Error generating advice" in advice1):
+                    prompt += f"  No specific learnings or advice recorded for Game {i}.\n"
+                prompt += "\n"
+            return prompt
+            
+        # Create the final prompt with combined advice
+        prompt = "Review of previous successful games advice and learnings to inform your strategy:\n\n"
+        
+        if combined_p0_advice:
+            prompt += f"Expert Strategic Advice:\n{combined_p0_advice}\n\n"
+        
+        if combined_p1_advice:
+            prompt += f"Self-Analysis and Learning:\n{combined_p1_advice}\n\n"
+            
         return prompt
     
     def extract_score(response: str) -> Optional[int]:
@@ -821,7 +872,8 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
                                 f"1. Strategic principles to follow\n"
                                 f"2. Specific moves to consider\n"
                                 f"3. Moves to avoid\n"
-                                f"4. Key patterns to watch for\n"
+                                f"4. Key patterns to watch for\n\n"
+                                f"IMPORTANT: Keep your response concise and focused. Limit your total response to maximum 300 words. Prioritize quality strategic insights over verbose explanations."
                             )
                             
                             # Save original system prompts
@@ -830,8 +882,8 @@ def setting4_combined_learning(player1_model_name: str, selected_games: List[str
                             
                             try:
                                 # Update system prompts for advice task
-                                agents[0].system_prompt = "You are an expert game analyst. Your task is to provide detailed strategic advice for the game based on the provided information."
-                                agents[1].system_prompt = "You are a player analyzing your own gameplay. Your task is to identify strengths, weaknesses, and provide guidance for future games."
+                                agents[0].system_prompt = "You are an expert game analyst. Your task is to provide detailed strategic advice for the game based on the provided information. Keep your advice concise and actionable, under 300 words total."
+                                agents[1].system_prompt = "You are a player analyzing your own gameplay. Your task is to identify strengths, weaknesses, and provide guidance for future games. Keep your analysis brief and focused, under 300 words total."
                                 
                                 # Get advice from both players
                                 try:
