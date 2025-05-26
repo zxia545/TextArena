@@ -14,7 +14,7 @@ from queue import Queue
 from threading import Lock
 import re
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filename=f'logs/experiment_{time.strftime("%Y%m%d_%H%M%S")}.log')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', filename=f'logs/experiment_{time.strftime("%Y%m%d_%H%M%S")}.log')
 logger = logging.getLogger(__name__)
 
 # # Selected games for evaluation
@@ -67,6 +67,35 @@ SELECTED_GAMES = [
     "Checkers-v0",
     "Othello-v0",
     # "SecretMafia-v0"
+]
+
+
+SELECTED_GAMES = [
+    "Battleship-v0",
+    "Breakthrough-v0",
+    "Chess-v0",
+    "ConnectFour-v0",
+    "Debate-v0",
+    "DontSaylt-v0",
+    "IteratedPrisonersDilemma-v0",
+    "IteratedRockPaperScissors-v0",
+    "KuhnPoker-v0",
+    "LetterAuction-v0",
+    "MemoryGame-v0",
+    "Nim-v0",
+    "Othello-v0",
+    "PigDice-v0",
+    "ScenarioPlanning-v0",
+    "SimpleBlindAuction-v0",
+    "SimpleNegotiation-v0",
+    "Stratego-v0",
+    "Taboo-v0",
+    "SimpleTak-v0",
+    "TruthAndDeception-v0",
+    "LiarsDice-v0",
+    "Poker-v0",
+    "Snake-v0",
+    "Surround-v0"
 ]
 
 
@@ -131,6 +160,8 @@ def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]
 
     # Track results for TrueSkill calculation
     results = {game: [] for game in selected_games}
+    # Store game histories
+    game_histories = {game: [] for game in selected_games}
     
     # Play each game num_rounds times
     for game in selected_games:
@@ -147,6 +178,12 @@ def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]
                 logger.debug(f"Environment created and configured for {game}")
 
                 env.reset(num_players=len(agents))
+                # Initialize game history tracking
+                current_game_history = {
+                    "moves": [],
+                    "outcome": None
+                }
+                
                 done = False
                 move_count = 0
                 while not done:
@@ -156,12 +193,20 @@ def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]
                         action = agents[player_id](observation)
                         logger.debug(f"Player {player_id} action: {action}")
                         done, info = env.step(action=action)
+                        
+                        # Record move in history
+                        current_game_history["moves"].append({
+                            "player": player_id,
+                            "observation": observation,
+                            "action": action
+                        })
                         move_count += 1
                     except Exception as e:
                         logger.error(f"Error during game play: {str(e)}")
                         # If there's an error during gameplay, mark the game as done and move to next
                         done = True
                         rewards = [0, 0]  # Default rewards for failed game
+                        current_game_history["outcome"] = "Error"
                         break
                 
                 rewards = env.close()
@@ -169,21 +214,32 @@ def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]
                 logger.info(f"Game {game_num + 1} completed. Rewards: Player0={rewards[0]}, Player1={rewards[1]}")
                 
                 # Determine game outcome
-                if rewards[0] > rewards[1]:
-                    outcome = "Player 0 won"
-                elif rewards[1] > rewards[0]:
-                    outcome = "Player 1 won"
+                if current_game_history["outcome"] != "Error":
+                    if rewards[0] > rewards[1]:
+                        outcome = "Player 0 won"
+                        current_game_history["outcome"] = outcome
+                    elif rewards[1] > rewards[0]:
+                        outcome = "Player 1 won"
+                        current_game_history["outcome"] = outcome
+                    else:
+                        outcome = "Draw"
+                        current_game_history["outcome"] = outcome
                 else:
-                    outcome = "Draw"
+                    outcome = "Error"
+                
                 logger.info(f"Game {game_num + 1} outcome: {outcome}")
                 
-                # Log results with outcome and model names
+                # Save the game history
+                game_histories[game].append(current_game_history)
+                
+                # Log results with outcome, model names, and complete history
                 with open(output_file, "a") as f:
                     json.dump({
                         "game": game,
                         "game_num": game_num,
                         "rewards": rewards,
                         "outcome": outcome,
+                        "history": current_game_history,
                         "player0_model": "qwen2.5-32b-chat",
                         "player1_model": player1_model_name,
                         "error": None
@@ -199,6 +255,7 @@ def setting1_basic_evaluation(player1_model_name: str, selected_games: List[str]
                         "game_num": game_num,
                         "rewards": [0, 0],
                         "outcome": "Error",
+                        "history": {"moves": [], "outcome": "Error"},
                         "player0_model": "qwen2.5-32b-chat",
                         "player1_model": player1_model_name,
                         "error": str(e)
